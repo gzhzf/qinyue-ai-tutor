@@ -1,0 +1,1110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <!-- 防止浏览器缓存旧版本 -->
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate" />
+  <meta http-equiv="Pragma" content="no-cache" />
+  <meta http-equiv="Expires" content="0" />
+  <title>琴乐启蒙 AI 导师</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", -apple-system, sans-serif;
+      background: linear-gradient(135deg, #f5f0f8 0%, #eef6ff 100%);
+      min-height: 100vh;
+      color: #2d2d2d;
+    }
+    .page { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+
+    .header { text-align: center; margin-bottom: 20px; }
+    .header h1 { font-size: 28px; font-weight: 800; color: #6b5b8a; letter-spacing: 1px; }
+    .header p { font-size: 14px; color: #8a8a8a; margin-top: 6px; }
+    .header .badge { display: inline-block; background: #9e8bac; color: white; font-size: 12px; padding: 3px 12px; border-radius: 20px; margin-top: 8px; }
+
+    /* 标签页 */
+    .tabs {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 16px;
+      justify-content: center;
+    }
+    .tab {
+      border: none;
+      border-radius: 14px;
+      padding: 12px 28px;
+      cursor: pointer;
+      font-size: 15px;
+      font-weight: 700;
+      background: white;
+      color: #8a8a8a;
+      box-shadow: 0 2px 8px rgba(110, 90, 138, 0.08);
+      transition: all 0.2s;
+    }
+    .tab:hover { color: #6b5b8a; }
+    .tab.active {
+      background: linear-gradient(135deg, #9e8bac, #7b6b9a);
+      color: white;
+      box-shadow: 0 6px 20px rgba(110, 90, 138, 0.3);
+    }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; animation: fadeIn 0.3s ease; }
+    @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+    /* 通用卡片 */
+    .card {
+      background: white;
+      border-radius: 20px;
+      padding: 24px;
+      box-shadow: 0 8px 32px rgba(110, 90, 138, 0.1);
+      border: 1px solid rgba(158, 139, 172, 0.12);
+    }
+
+    .api-status-bar { display: flex; align-items: center; gap: 8px; padding: 8px 16px; border-radius: 12px; font-size: 13px; margin-bottom: 16px; background: #f5f0f8; color: #666; }
+    .api-light { font-size: 16px; }
+    .api-status-bar.connected { background: #e8f5e9; color: #2e7d32; }
+    .api-status-bar.connecting { background: #fff3e0; color: #e65100; }
+    .api-status-bar.error { background: #ffebee; color: #c62828; }
+
+    /* ========== 语音对话面板 ========== */
+    .chat-panel { display: grid; grid-template-columns: 360px 1fr; gap: 20px; }
+    .status { display: inline-block; padding: 6px 16px; border-radius: 20px; font-size: 13px; font-weight: 600; margin-bottom: 20px; transition: all 0.3s; }
+    .status.ready { background: #e8f5e9; color: #2e7d32; }
+    .status.listening { background: #fff3e0; color: #e65100; }
+    .status.thinking { background: #e3f2fd; color: #1565c0; }
+    .status.speaking { background: #f3e5f5; color: #7b1fa2; }
+    .status.error { background: #ffebee; color: #c62828; }
+    .mic-wrap { text-align: center; margin: 16px 0; }
+    .dual-buttons { display: flex; gap: 20px; justify-content: center; margin: 16px 0; }
+    .big-mic { width: 110px; height: 110px; border-radius: 50%; border: none; background: linear-gradient(135deg, #9e8bac, #7b6b9a); color: white; font-size: 42px; cursor: pointer; box-shadow: 0 12px 30px rgba(110, 90, 138, 0.3); transition: all 0.25s; display: inline-flex; align-items: center; justify-content: center; flex-direction: column; gap: 2px; }
+    .big-mic:hover { transform: translateY(-3px); box-shadow: 0 16px 36px rgba(110, 90, 138, 0.4); }
+    .big-mic.recording { background: linear-gradient(135deg, #ef5350, #e53935); animation: pulse 1.3s infinite; }
+    .big-piano { width: 110px; height: 110px; border-radius: 50%; border: none; background: linear-gradient(135deg, #5c7cfa, #3b5bdb); color: white; font-size: 42px; cursor: pointer; box-shadow: 0 12px 30px rgba(59, 91, 219, 0.3); transition: all 0.25s; display: inline-flex; align-items: center; justify-content: center; flex-direction: column; gap: 2px; }
+    .big-piano:hover { transform: translateY(-3px); box-shadow: 0 16px 36px rgba(59, 91, 219, 0.4); }
+    .big-piano.recording { background: linear-gradient(135deg, #ef5350, #e53935); animation: pulse 1.3s infinite; }
+    .big-btn-label { font-size: 11px; font-weight: 700; margin-top: 2px; }
+    @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.06); } 100% { transform: scale(1); } }
+    .mic-hint { font-size: 13px; color: #aaa; margin-top: 10px; }
+    .btn-group { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 18px; }
+    .btn { border: none; border-radius: 14px; padding: 13px 8px; cursor: pointer; font-size: 14px; font-weight: 700; transition: all 0.2s; display: flex; align-items: center; justify-content: center; gap: 6px; }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn-stop { background: #fff3e0; color: #e65100; }
+    .btn-stop:hover:not(:disabled) { background: #ffe0b2; }
+    .btn-speak { background: #f3e5f5; color: #7b1fa2; }
+    .btn-speak:hover:not(:disabled) { background: #e1bee7; }
+    .btn-clear { background: #fce4ec; color: #c62828; }
+    .btn-clear:hover:not(:disabled) { background: #f8bbd0; }
+    .btn-send { background: #e8f5e9; color: #2e7d32; }
+    .btn-send:hover:not(:disabled) { background: #c8e6c9; }
+    .input-area { margin-top: 16px; }
+    .input-area textarea { width: 100%; height: 70px; border: 2px solid #e8e0ee; border-radius: 14px; padding: 12px; font-size: 14px; resize: none; outline: none; transition: border-color 0.2s; font-family: inherit; }
+    .input-area textarea:focus { border-color: #9e8bac; }
+    .tips { margin-top: 16px; padding: 14px; border-radius: 14px; background: #faf7fc; font-size: 13px; color: #888; line-height: 1.8; }
+    .tips strong { color: #6b5b8a; }
+
+    .chat-area { display: flex; flex-direction: column; gap: 14px; max-height: 560px; overflow-y: auto; padding-right: 6px; }
+    .chat-area::-webkit-scrollbar { width: 6px; }
+    .chat-area::-webkit-scrollbar-thumb { background: #d4c4dd; border-radius: 3px; }
+    .msg { max-width: 85%; padding: 14px 18px; border-radius: 18px; font-size: 15px; line-height: 1.75; white-space: pre-wrap; word-break: break-word; animation: msgIn 0.3s ease; }
+    @keyframes msgIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+    .msg.user { align-self: flex-end; background: linear-gradient(135deg, #9e8bac, #8270a0); color: white; border-bottom-right-radius: 4px; }
+    .msg.bot { align-self: flex-start; background: #f5f0f8; color: #333; border-bottom-left-radius: 4px; border: 1px solid rgba(158, 139, 172, 0.1); }
+    .msg.bot.thinking { color: #999; font-style: italic; }
+    .msg-label { font-size: 12px; color: #aaa; margin-bottom: 4px; padding: 0 4px; }
+    .msg-label.user { text-align: right; }
+    .msg-label.bot { text-align: left; }
+    .chat-empty { text-align: center; color: #ccc; padding: 60px 20px; font-size: 15px; }
+
+    /* ========== 测评面板 ========== */
+    .assess-panel { max-width: 700px; margin: 0 auto; }
+    .upload-area { border: 2px dashed #c4b4d4; border-radius: 16px; padding: 40px 20px; text-align: center; cursor: pointer; transition: all 0.2s; margin-bottom: 16px; }
+    .upload-area:hover { border-color: #9e8bac; background: #faf7fc; }
+    .upload-area.dragover { border-color: #7b6b9a; background: #f3e8f9; }
+    .upload-icon { font-size: 44px; margin-bottom: 12px; }
+    .upload-text { font-size: 15px; color: #666; }
+    .upload-hint { font-size: 13px; color: #aaa; margin-top: 8px; }
+    .file-info { display: none; align-items: center; gap: 10px; padding: 12px 16px; background: #f5f0f8; border-radius: 12px; margin-bottom: 16px; font-size: 14px; }
+    .file-info.show { display: flex; }
+    .file-info .remove { margin-left: auto; cursor: pointer; color: #c62828; font-weight: 700; }
+    .btn-assess { width: 100%; border: none; border-radius: 16px; padding: 16px; cursor: pointer; font-size: 16px; font-weight: 700; background: linear-gradient(135deg, #9e8bac, #7b6b9a); color: white; box-shadow: 0 8px 24px rgba(110, 90, 138, 0.3); transition: all 0.2s; }
+    .btn-assess:hover:not(:disabled) { transform: translateY(-2px); box-shadow: 0 12px 28px rgba(110, 90, 138, 0.4); }
+    .btn-assess:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+    .status-msg { text-align: center; padding: 20px; font-size: 15px; color: #8a8a8a; display: none; }
+    .status-msg.show { display: block; }
+    .spinner { display: inline-block; width: 20px; height: 20px; border: 3px solid #e0d4ea; border-top-color: #9e8bac; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 8px; vertical-align: middle; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .result { display: none; margin-top: 20px; }
+    .result.show { display: block; }
+    .total-score-wrap { text-align: center; margin-bottom: 24px; }
+    .total-score { font-size: 52px; font-weight: 800; color: #7b6b9a; }
+    .total-label { font-size: 14px; color: #aaa; }
+    .total-level { display: inline-block; padding: 4px 16px; border-radius: 20px; font-size: 14px; font-weight: 700; margin-top: 8px; }
+    .level-excellent { background: #e8f5e9; color: #2e7d32; }
+    .level-good { background: #e3f2fd; color: #1565c0; }
+    .level-pass { background: #fff3e0; color: #e65100; }
+    .level-fail { background: #ffebee; color: #c62828; }
+    .score-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 20px; }
+    .score-item { padding: 16px; border-radius: 14px; background: #faf7fc; border: 1px solid rgba(158, 139, 172, 0.1); }
+    .score-item .name { font-size: 14px; font-weight: 700; color: #555; margin-bottom: 6px; }
+    .score-item .bar-wrap { height: 8px; background: #e8e0ee; border-radius: 4px; overflow: hidden; margin: 8px 0; }
+    .score-item .bar { height: 100%; border-radius: 4px; transition: width 0.8s ease; }
+    .score-item .comment { font-size: 12px; color: #888; }
+    .score-item .num { font-size: 20px; font-weight: 700; color: #7b6b9a; }
+    .comment-box { padding: 18px; border-radius: 14px; background: linear-gradient(135deg, #f5f0f8, #eef6ff); font-size: 15px; line-height: 1.8; white-space: pre-wrap; color: #333; }
+    .comment-box .label { font-weight: 700; color: #6b5b8a; margin-bottom: 8px; display: block; }
+    .wrong-song { text-align: center; padding: 40px 20px; display: none; }
+    .wrong-song.show { display: block; }
+    .wrong-song .icon { font-size: 56px; margin-bottom: 16px; }
+    .wrong-song .msg { font-size: 18px; color: #c62828; margin-bottom: 8px; }
+    .wrong-song .hint { font-size: 14px; color: #aaa; }
+    .truncation-notice { background: #e3f2fd; color: #1565c0; padding: 8px 14px; border-radius: 10px; font-size: 13px; text-align: center; margin-bottom: 16px; display: none; }
+    .truncation-notice.show { display: block; }
+
+    /* 测评进度可视化 */
+    .assess-progress { display: none; margin-top: 16px; }
+    .assess-progress.show { display: block; }
+    .progress-steps { display: flex; flex-direction: column; gap: 10px; }
+    .progress-step { display: flex; align-items: center; gap: 10px; padding: 10px 14px; border-radius: 12px; background: #f5f0f8; font-size: 14px; color: #aaa; transition: all 0.4s; }
+    .progress-step.active { background: #e3f2fd; color: #1565c0; font-weight: 600; }
+    .progress-step.done { background: #e8f5e9; color: #2e7d32; }
+    .progress-step .step-icon { width: 24px; height: 24px; border-radius: 50%; background: #e0d4ea; display: flex; align-items: center; justify-content: center; font-size: 12px; flex-shrink: 0; }
+    .progress-step.active .step-icon { background: #2196f3; color: white; animation: spin 1s linear infinite; }
+    .progress-step.done .step-icon { background: #4caf50; color: white; }
+
+    /* 体检报告 */
+    .report-section { display: none; }
+    .report-section.show { display: block; }
+    .compare-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 8px; }
+    .compare-table th { background: #f5f0f8; color: #6b5b8a; padding: 8px 10px; text-align: left; font-weight: 700; border-radius: 6px 6px 0 0; }
+    .compare-table td { padding: 10px; border-bottom: 1px solid #eee; vertical-align: top; line-height: 1.5; }
+    .compare-table td.dim-name { font-weight: 700; color: #555; white-space: nowrap; width: 100px; }
+    .compare-table .sub { color: #aaa; font-size: 12px; }
+    .issue-item { padding: 8px 12px; border-radius: 8px; margin-bottom: 6px; font-size: 13px; line-height: 1.6; }
+    .issue-item.good { background: #e8f5e9; }
+    .issue-item.minor { background: #fff3e0; }
+    .issue-item.major { background: #ffebee; }
+    .advice-box { padding: 16px; border-radius: 14px; background: linear-gradient(135deg, #f5f0f8, #eef6ff); border: 1px solid rgba(158, 139, 172, 0.12); }
+    .advice-item { font-size: 14px; color: #444; line-height: 1.8; padding: 4px 0; }
+
+    /* 录音回放对比 */
+    .compare-section { margin-top: 20px; }
+    .compare-section .label { font-weight: 700; color: #6b5b8a; margin-bottom: 12px; font-size: 15px; }
+    .compare-players { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .compare-player { padding: 14px; border-radius: 14px; background: #faf7fc; border: 1px solid rgba(158, 139, 172, 0.12); }
+    .compare-player .title { font-size: 13px; font-weight: 700; margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
+    .compare-player .title.mine { color: #7b6b9a; }
+    .compare-player .title.ref { color: #3b5bdb; }
+    .compare-player audio { width: 100%; height: 36px; }
+
+    /* 钢琴键盘可视化 */
+    .keyboard-section { margin-top: 20px; }
+    .keyboard-section .label { font-weight: 700; color: #6b5b8a; margin-bottom: 8px; font-size: 15px; }
+    .keyboard-legend { display: flex; gap: 16px; margin-bottom: 8px; font-size: 12px; color: #888; }
+    .keyboard-legend span { display: flex; align-items: center; gap: 4px; }
+    .keyboard-legend .dot { width: 10px; height: 10px; border-radius: 3px; }
+    .piano-keyboard { display: flex; position: relative; height: 80px; overflow-x: auto; border-radius: 8px; border: 1px solid #e0d4ea; }
+    .piano-keyboard::-webkit-scrollbar { height: 4px; }
+    .piano-keyboard::-webkit-scrollbar-thumb { background: #d4c4dd; border-radius: 2px; }
+    .white-key { flex: 0 0 32px; height: 80px; background: white; border-right: 1px solid #ddd; position: relative; display: flex; align-items: flex-end; justify-content: center; padding-bottom: 4px; font-size: 9px; color: #ccc; }
+    .white-key.correct { background: #c8e6c9; }
+    .white-key.wrong { background: #ffcdd2; }
+    .white-key.missed { background: #fff9c4; }
+    .black-key { position: absolute; width: 20px; height: 50px; background: #333; z-index: 2; border-radius: 0 0 3px 3px; }
+    .black-key.correct { background: #4caf50; }
+    .black-key.wrong { background: #f44336; }
+    .black-key.missed { background: #ff9800; }
+
+    /* Tomplay练习建议 */
+    .tomplay-section { margin-top: 20px; display: none; }
+    .tomplay-section.show { display: block; }
+    .tomplay-section .label { font-weight: 700; color: #3b5bdb; margin-bottom: 4px; font-size: 15px; }
+    .tomplay-subtitle { font-size: 13px; color: #888; margin-bottom: 14px; }
+    .tomplay-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+    .tomplay-card { padding: 16px; border-radius: 14px; background: linear-gradient(135deg, #e8eaf6, #e3f2fd); border: 1px solid rgba(59, 91, 219, 0.15); }
+    .tomplay-card .tc-icon { font-size: 28px; margin-bottom: 8px; }
+    .tomplay-card .tc-title { font-weight: 700; font-size: 14px; color: #3b5bdb; margin-bottom: 4px; }
+    .tomplay-card .tc-desc { font-size: 13px; color: #555; line-height: 1.6; }
+    .tomplay-card .tc-detail { font-size: 12px; color: #3b5bdb; margin-top: 6px; font-weight: 600; }
+
+    @media (max-width: 820px) {
+      .chat-panel { grid-template-columns: 1fr; }
+      .score-grid { grid-template-columns: 1fr; }
+      .compare-players { grid-template-columns: 1fr; }
+      .header h1 { font-size: 22px; }
+      .tab { padding: 10px 18px; font-size: 14px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <div class="header">
+      <h1>&#127929; 琴乐启蒙 AI 导师</h1>
+      <p>面向 6-9 岁钢琴启蒙课堂的 AI 互动助教</p>
+      <span class="badge">趣味启蒙 - 节奏先行</span>
+    </div>
+
+    <div class="api-status-bar connecting" id="apiStatusBar">
+      <span class="api-light" id="apiLight">&#128992;</span>
+      <span id="apiStatusText">正在连接智能体...</span>
+    </div>
+
+    <!-- 标签页切换 -->
+    <div class="tabs">
+      <button class="tab active" id="tabChat" onclick="switchTab('chat')">&#127908; 语音对话</button>
+      <button class="tab" id="tabAssess" onclick="switchTab('assess')">&#127925; 演奏测评</button>
+    </div>
+
+    <!-- ========== 语音对话面板 ========== -->
+    <div class="tab-content active" id="panelChat">
+      <div class="chat-panel">
+        <div class="card">
+          <div class="status ready" id="status">准备就绪</div>
+
+          <div class="dual-buttons">
+            <button class="big-mic" id="micBtn" title="点击开始说话">&#127908;<span class="big-btn-label">说话</span></button>
+            <button class="big-piano" id="pianoBtn" title="点击开始弹琴测评">&#127929;<span class="big-btn-label">弹琴测评</span></button>
+          </div>
+          <div class="mic-hint" id="micHint">点击麦克风说话，点击钢琴进入演奏测评</div>
+          <div class="btn-group">
+            <button class="btn btn-stop" id="stopBtn">&#9940; 停止</button>
+            <button class="btn btn-speak" id="speakBtn">&#128266; 朗读回答</button>
+            <button class="btn btn-clear" id="clearBtn">&#129530; 清空对话</button>
+            <button class="btn btn-send" id="sendBtn">&#128229; 发送</button>
+          </div>
+          <div class="input-area">
+            <textarea id="inputText" placeholder="也可以直接输入文字... 按Ctrl+Enter发送"></textarea>
+          </div>
+          <div class="tips">
+            <strong>&#127908; 语音对话：</strong>点击麦克风，与小琴语音交流<br>
+            "请用孩子能听懂的话解释 3/4 拍"<br><br>
+            <strong>&#127925; 演奏测评：</strong>上传或录制一段巴赫《G大调小步舞曲Anh.114》，小琴将生成AI辅助测评
+          </div>
+        </div>
+        <div class="card">
+          <div class="chat-area" id="chatArea">
+            <div class="chat-empty" id="chatEmpty">
+              你好, 我是小琴 &#127929;<br><br>
+              你可以用语音或文字和我交流<br>
+              点击左侧麦克风开始说话吧!
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ========== 演奏测评面板 ========== -->
+    <div class="tab-content" id="panelAssess">
+      <div class="assess-panel">
+        <div class="card">
+          <div style="text-align:center;margin-bottom:12px;font-size:14px;color:#888;">
+            当前测评曲目：巴赫《G大调小步舞曲 Anh.114》<br>建议时长 30-60 秒，环境安静、音量清楚
+          </div>
+          <div class="upload-area" id="uploadArea">
+            <div class="upload-icon">&#127925;</div>
+            <div class="upload-text">点击或拖拽演奏录音到这里</div>
+            <div class="upload-hint">支持 WAV / MP3 / M4A</div>
+          </div>
+          <input type="file" id="fileInput" accept="audio/*,.m4a,.aac,.ogg,.opus,.webm,.amr,.3gp,.wav,.mp3,.flac" style="display:none" />
+          <div class="file-info" id="fileInfo">
+            <span id="fileName"></span>
+            <span class="remove" id="removeFile">&times;</span>
+          </div>
+          <button class="btn-assess" id="assessBtn" disabled>开始测评</button>
+          <div class="status-msg" id="assessStatus"></div>
+          <div class="assess-progress" id="assessProgress">
+            <div class="progress-steps">
+              <div class="progress-step" id="step1"><span class="step-icon">1</span> 正在加载音频...</div>
+              <div class="progress-step" id="step2"><span class="step-icon">2</span> 正在检测曲目是否为Anh.114...</div>
+              <div class="progress-step" id="step3"><span class="step-icon">3</span> 正在分析节奏稳定性...</div>
+              <div class="progress-step" id="step4"><span class="step-icon">4</span> 正在比对音高准确性...</div>
+              <div class="progress-step" id="step5"><span class="step-icon">5</span> 正在评估力度与表现力...</div>
+              <div class="progress-step" id="step6"><span class="step-icon">6</span> 正在生成AI讲评...</div>
+            </div>
+          </div>
+          <audio id="audioPlayer" controls style="width:100%; margin-top:16px; display:none;"></audio>
+        </div>
+
+        <div class="truncation-notice" id="truncationNotice"></div>
+
+        <div class="card wrong-song" id="wrongSong">
+          <div class="icon">&#9888;&#65039;</div>
+          <div class="msg" id="wrongMsg"></div>
+          <div class="hint" id="wrongHint"></div>
+        </div>
+
+        <div class="card result" id="resultCard">
+          <div class="total-score-wrap">
+            <div class="total-score" id="totalScore">--</div>
+            <div class="total-label">综合得分</div>
+            <div class="total-level" id="totalLevel"></div>
+            <div style="font-size:12px;color:#aaa;margin-top:8px;">AI辅助评分，仅供课堂参考<br>最终判断由老师完成</div>
+          </div>
+          <div class="score-grid" id="scoreGrid"></div>
+
+          <!-- 5维度音乐体检报告 -->
+          <div class="report-section" id="reportSection" style="margin-top:20px;">
+            <div id="reportContent"></div>
+          </div>
+
+          <!-- 录音回放对比 -->
+          <div class="compare-section">
+            <div class="label">&#127911; 录音对比 — 听听你和标准的差距</div>
+            <div class="compare-players">
+              <div class="compare-player">
+                <div class="title mine">&#127909; 你的演奏</div>
+                <audio id="userPlayback" controls></audio>
+              </div>
+              <div class="compare-player">
+                <div class="title ref">&#127925; 标准演奏</div>
+                <audio id="refPlayback" controls></audio>
+              </div>
+            </div>
+          </div>
+
+          <!-- 钢琴键盘可视化 -->
+          <div class="keyboard-section">
+            <div class="label">&#127881; 旋律轮廓对比 <span style="font-size:12px;color:#aaa;font-weight:400;">（实验功能）</span></div>
+            <div class="keyboard-legend">
+              <span><span class="dot" style="background:#c8e6c9"></span>大体匹配</span>
+              <span><span class="dot" style="background:#ffcdd2"></span>明显偏差</span>
+              <span><span class="dot" style="background:#fff9c4"></span>可能遗漏</span>
+              <span><span class="dot" style="background:white;border:1px solid #ddd"></span>未涉及</span>
+            </div>
+            <div class="piano-keyboard" id="pianoKeyboard"></div>
+          </div>
+
+          <div class="comment-box">
+            <span class="label">&#128221; AI讲评</span>
+            <div id="commentText"></div>
+          </div>
+
+          <!-- Tomplay练习建议 -->
+          <div class="tomplay-section" id="tomplaySection">
+            <div class="label">&#127925; 返回 Tomplay 练习</div>
+            <div class="tomplay-subtitle">根据AI测评结果，建议在Tomplay中按以下方案练习</div>
+            <div class="tomplay-cards" id="tomplayCards"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    /* ===================== 标签页切换 ===================== */
+    function switchTab(name) {
+      document.querySelectorAll(".tab").forEach(function(t) { t.classList.remove("active"); });
+      document.querySelectorAll(".tab-content").forEach(function(c) { c.classList.remove("active"); });
+      if (name === "chat") {
+        document.getElementById("tabChat").classList.add("active");
+        document.getElementById("panelChat").classList.add("active");
+        window.speechSynthesis.cancel();
+      } else {
+        document.getElementById("tabAssess").classList.add("active");
+        document.getElementById("panelAssess").classList.add("active");
+        if (isRecording && recognition) recognition.stop();
+        if (pianoRecording && pianoRecorder && pianoRecorder.state === "recording") pianoRecorder.stop();
+        window.speechSynthesis.cancel();
+      }
+    }
+
+    /* ===================== 语音对话逻辑 ===================== */
+    const micBtn = document.getElementById("micBtn");
+    const stopBtn = document.getElementById("stopBtn");
+    const speakBtn = document.getElementById("speakBtn");
+    const clearBtn = document.getElementById("clearBtn");
+    const sendBtn = document.getElementById("sendBtn");
+    const inputText = document.getElementById("inputText");
+    const chatArea = document.getElementById("chatArea");
+    const statusEl = document.getElementById("status");
+    const micHint = document.getElementById("micHint");
+
+    let recognition = null;
+    let isRecording = false;
+    let isThinking = false;
+    let conversationMessages = [];
+    let useServerSTT = false;  // 是否使用服务端语音识别
+    let mediaRecorder = null;
+    let audioChunks = [];
+    const userId = "voice-demo-" + Math.random().toString(36).slice(2, 10);
+
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRecognition) {
+      /* 不支持 Web Speech API (iOS/iPad Safari) → 使用服务端语音识别 */
+      useServerSTT = true;
+      micHint.textContent = "点击麦克风开始录音";
+      statusEl.textContent = "准备就绪 (录音模式)";
+      statusEl.className = "status ready";
+    } else {
+      recognition = new SpeechRecognition();
+      recognition.lang = "zh-CN";
+      recognition.interimResults = true;
+      recognition.continuous = false;
+      recognition.onstart = function() {
+        isRecording = true; micBtn.classList.add("recording");
+        statusEl.textContent = "正在聆听, 请说话..."; statusEl.className = "status listening";
+        micHint.textContent = "再次点击可停止录音";
+      };
+      recognition.onresult = function(event) {
+        let text = "";
+        for (let i = 0; i < event.results.length; i++) text += event.results[i][0].transcript;
+        inputText.value = text;
+      };
+      recognition.onerror = function(event) {
+        statusEl.textContent = "语音识别失败: " + event.error; statusEl.className = "status error";
+        isRecording = false; micBtn.classList.remove("recording");
+        micHint.textContent = "点击麦克风开始说话";
+      };
+      recognition.onend = function() {
+        isRecording = false; micBtn.classList.remove("recording");
+        micHint.textContent = "点击麦克风说话，点击钢琴进入演奏测评";
+        if (inputText.value.trim()) { statusEl.textContent = "识别完成, 正在发送..."; statusEl.className = "status ready"; sendToAgent(); }
+      };
+    }
+
+    /* 麦克风按钮: 根据模式选择前端识别或服务端识别 */
+    micBtn.onclick = async function() {
+      if (useServerSTT) {
+        /* 服务端语音识别模式 (iOS/iPad) */
+        if (isRecording) {
+          if (mediaRecorder && mediaRecorder.state === "recording") mediaRecorder.stop();
+          return;
+        }
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          audioChunks = [];
+          mediaRecorder = new MediaRecorder(stream);
+          mediaRecorder.ondataavailable = function(e) { if (e.data.size > 0) audioChunks.push(e.data); };
+          mediaRecorder.onstop = async function() {
+            stream.getTracks().forEach(function(t) { t.stop(); });
+            isRecording = false; micBtn.classList.remove("recording");
+            micHint.textContent = "点击麦克风说话，点击钢琴进入演奏测评";
+            if (audioChunks.length === 0) return;
+            statusEl.textContent = "正在识别语音..."; statusEl.className = "status thinking";
+            const audioBlob = new Blob(audioChunks, { type: "audio/webm" });
+            const formData = new FormData();
+            formData.append("audio", audioBlob, "recording.webm");
+            try {
+              const sttRes = await fetch("/api/speech-to-text", { method: "POST", body: formData });
+              const sttData = await sttRes.json();
+              if (sttData.text && sttData.text.trim()) {
+                inputText.value = sttData.text;
+                statusEl.textContent = "识别完成, 正在发送..."; statusEl.className = "status ready";
+                sendToAgent();
+              } else {
+                statusEl.textContent = "未识别到语音, 请重试或直接输入文字";
+                statusEl.className = "status error";
+              }
+            } catch(err) {
+              statusEl.textContent = "识别失败, 请直接输入文字";
+              statusEl.className = "status error";
+            }
+          };
+          mediaRecorder.start();
+          isRecording = true; micBtn.classList.add("recording");
+          statusEl.textContent = "正在录音, 请说话..."; statusEl.className = "status listening";
+          micHint.textContent = "再次点击停止录音并识别";
+        } catch(err) {
+          statusEl.textContent = "无法访问麦克风, 请直接输入文字";
+          statusEl.className = "status error";
+          micHint.textContent = "也可以直接在下方输入文字";
+        }
+      } else {
+        /* 前端语音识别模式 (Chrome/Edge) */
+        if (!recognition) return;
+        if (isRecording) { recognition.stop(); }
+        else { window.speechSynthesis.cancel(); inputText.value = ""; recognition.start(); }
+      }
+    };
+
+    /* 钢琴测评按钮: 录音后直接送测评 */
+    let pianoRecording = false;
+    let pianoRecorder = null;
+    let pianoChunks = [];
+    const pianoBtn = document.getElementById("pianoBtn");
+
+    pianoBtn.onclick = async function() {
+      if (pianoRecording) {
+        if (pianoRecorder && pianoRecorder.state === "recording") pianoRecorder.stop();
+        return;
+      }
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        pianoChunks = [];
+        pianoRecorder = new MediaRecorder(stream);
+        pianoRecorder.ondataavailable = function(e) { if (e.data.size > 0) pianoChunks.push(e.data); };
+        pianoRecorder.onstop = async function() {
+          stream.getTracks().forEach(function(t) { t.stop(); });
+          pianoRecording = false;
+          pianoBtn.classList.remove("recording");
+          micHint.textContent = "点击麦克风说话，点击钢琴进入演奏测评";
+          if (pianoChunks.length === 0) return;
+          /* 自动切到测评标签页 */
+          switchTab("assess");
+          startProgress();
+          resultCard.classList.remove("show"); wrongSong.classList.remove("show"); truncationNotice.classList.remove("show");
+          const audioBlob = new Blob(pianoChunks, { type: "audio/webm" });
+          audioPlayer.src = URL.createObjectURL(audioBlob);
+          audioPlayer.style.display = "block";
+          const formData = new FormData();
+          formData.append("audio", audioBlob, "piano_recording.webm");
+          try {
+            var res = await fetch("/api/assess", { method: "POST", body: formData });
+            var data = await res.json();
+            assessBtn.disabled = false;
+            if (!res.ok) { stopProgress("error"); alert("测评失败: " + (data.error || "未知错误")); return; }
+            if (!data.isCorrectSong) { stopProgress("mismatch"); showMismatch(data); return; }
+            stopProgress("success");
+            showResult(data);
+            statusEl.textContent = "测评完成"; statusEl.className = "status ready";
+          } catch(err) {
+            stopProgress("error");
+            assessBtn.disabled = false;
+            alert("测评请求失败: " + err.message);
+          }
+        };
+        pianoRecorder.start();
+        pianoRecording = true;
+        pianoBtn.classList.add("recording");
+        statusEl.textContent = "正在录制演奏..."; statusEl.className = "status listening";
+        micHint.textContent = "再次点击钢琴按钮停止录音并测评";
+      } catch(err) {
+        statusEl.textContent = "无法访问麦克风"; statusEl.className = "status error";
+      }
+    };
+
+    stopBtn.onclick = function() {
+      if (useServerSTT) {
+        if (isRecording && mediaRecorder && mediaRecorder.state === "recording") { mediaRecorder.stop(); return; }
+      } else {
+        if (isRecording && recognition) recognition.stop();
+      }
+      if (pianoRecording && pianoRecorder && pianoRecorder.state === "recording") { pianoRecorder.stop(); return; }
+      window.speechSynthesis.cancel();
+      statusEl.textContent = "已停止"; statusEl.className = "status ready";
+      setTimeout(function() { statusEl.textContent = useServerSTT ? "准备就绪 (录音模式)" : "准备就绪"; }, 1500);
+    };
+    speakBtn.onclick = function() {
+      const botMsgs = chatArea.querySelectorAll(".msg.bot");
+      if (botMsgs.length === 0) { statusEl.textContent = "没有可朗读的回答"; statusEl.className = "status error"; return; }
+      speakText(botMsgs[botMsgs.length - 1].textContent);
+    };
+    function speakText(text) {
+      if (!text) return;
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(text);
+      utter.lang = "zh-CN"; utter.rate = 0.92; utter.pitch = 1.05; utter.volume = 1;
+      const voices = window.speechSynthesis.getVoices();
+      const zhVoice = voices.find(function(v) { return v.lang.includes("zh"); });
+      if (zhVoice) utter.voice = zhVoice;
+      utter.onstart = function() { statusEl.textContent = "正在朗读..."; statusEl.className = "status speaking"; };
+      utter.onend = function() { statusEl.textContent = "准备就绪"; statusEl.className = "status ready"; };
+      window.speechSynthesis.speak(utter);
+    }
+    clearBtn.onclick = function() {
+      conversationMessages = []; inputText.value = ""; window.speechSynthesis.cancel();
+      chatArea.innerHTML = "";
+      const empty = document.createElement("div"); empty.className = "chat-empty";
+      empty.innerHTML = "对话已清空 &#127929;<br><br>点击麦克风开始新的对话!";
+      chatArea.appendChild(empty);
+      statusEl.textContent = "准备就绪"; statusEl.className = "status ready";
+    };
+    sendBtn.onclick = sendToAgent;
+    inputText.addEventListener("keydown", function(e) { if (e.ctrlKey && e.key === "Enter") { e.preventDefault(); sendToAgent(); } });
+
+    async function sendToAgent() {
+      const message = inputText.value.trim();
+      if (!message) { statusEl.textContent = "请先说话或输入文字"; statusEl.className = "status error"; return; }
+      if (isThinking) return;
+      const empty = chatArea.querySelector(".chat-empty"); if (empty) empty.remove();
+      addMessage("user", message);
+      conversationMessages.push({ role: "user", content: [{ type: "text", text: message }] });
+      inputText.value = "";
+      isThinking = true; statusEl.textContent = "小琴正在思考..."; statusEl.className = "status thinking";
+      const thinkingMsg = addMessage("bot", "小琴正在思考, 请稍等...", true);
+      try {
+        const res = await fetch("/api/chat", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: conversationMessages, userId: userId }) });
+        const data = await res.json();
+        thinkingMsg.remove();
+        if (!res.ok) { addMessage("bot", "[错误] " + (data.error || "请求失败")); statusEl.textContent = "请求失败"; statusEl.className = "status error"; return; }
+        const answer = data.answer || "未收到回答";
+        addMessage("bot", answer);
+        conversationMessages.push({ role: "assistant", content: [{ type: "text", text: answer }] });
+        statusEl.textContent = "回答完成"; statusEl.className = "status ready";
+        speakText(answer);
+      } catch (err) { thinkingMsg.remove(); addMessage("bot", "[网络错误] " + err.message); statusEl.textContent = "网络错误"; statusEl.className = "status error"; }
+      finally { isThinking = false; }
+    }
+    function addMessage(role, text, isThinkingMsg) {
+      const wrap = document.createElement("div");
+      const label = document.createElement("div"); label.className = "msg-label " + role; label.textContent = role === "user" ? "你说" : "小琴"; wrap.appendChild(label);
+      const msg = document.createElement("div"); msg.className = "msg " + role + (isThinkingMsg ? " thinking" : ""); msg.textContent = text; wrap.appendChild(msg);
+      chatArea.appendChild(wrap); chatArea.scrollTop = chatArea.scrollHeight; return msg;
+    }
+
+    /* ===================== 演奏测评逻辑 ===================== */
+    var uploadArea = document.getElementById("uploadArea");
+    var fileInput = document.getElementById("fileInput");
+    var fileInfo = document.getElementById("fileInfo");
+    var fileNameEl = document.getElementById("fileName");
+    var removeFile = document.getElementById("removeFile");
+    var assessBtn = document.getElementById("assessBtn");
+    var assessStatus = document.getElementById("assessStatus");
+    var resultCard = document.getElementById("resultCard");
+    var wrongSong = document.getElementById("wrongSong");
+    var audioPlayer = document.getElementById("audioPlayer");
+    var truncationNotice = document.getElementById("truncationNotice");
+    var selectedFile = null;
+
+    uploadArea.onclick = function() { fileInput.click(); };
+    fileInput.onchange = function(e) { handleFile(e.target.files[0]); };
+    uploadArea.ondragover = function(e) { e.preventDefault(); uploadArea.classList.add("dragover"); };
+    uploadArea.ondragleave = function() { uploadArea.classList.remove("dragover"); };
+    uploadArea.ondrop = function(e) { e.preventDefault(); uploadArea.classList.remove("dragover"); if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); };
+
+    function handleFile(file) {
+      if (!file) return;
+      if (!file.type.startsWith("audio/") && !file.name.match(/\.(m4a|aac|ogg|opus|webm|amr|3gp|wav|mp3|flac)$/i)) { alert("请上传音频文件 (WAV/MP3/M4A)"); return; }
+      selectedFile = file;
+      fileNameEl.textContent = file.name + " (" + (file.size / 1024).toFixed(0) + "KB)";
+      fileInfo.classList.add("show");
+      assessBtn.disabled = false;
+      resultCard.classList.remove("show"); wrongSong.classList.remove("show"); truncationNotice.classList.remove("show");
+      audioPlayer.src = URL.createObjectURL(file); audioPlayer.style.display = "block";
+    }
+    removeFile.onclick = function() {
+      selectedFile = null; fileInfo.classList.remove("show"); assessBtn.disabled = true;
+      fileInput.value = ""; audioPlayer.src = ""; audioPlayer.style.display = "none";
+    };
+
+    function scoreColor(s) { if (s >= 85) return "#4caf50"; if (s >= 70) return "#2196f3"; if (s >= 60) return "#ff9800"; return "#f44336"; }
+    function levelText(total) { if (total >= 85) return { text: "优秀", cls: "level-excellent" }; if (total >= 70) return { text: "良好", cls: "level-good" }; if (total >= 60) return { text: "及格", cls: "level-pass" }; return { text: "需要加油", cls: "level-fail" }; }
+
+    /* 测评进度动画 */
+    var assessProgress = document.getElementById("assessProgress");
+    var progressTimer = null;
+
+    function startProgress() {
+      assessProgress.classList.add("show");
+      var steps = ["step1","step2","step3","step4","step5","step6"];
+      steps.forEach(function(id) {
+        var el = document.getElementById(id);
+        el.classList.remove("active","done","failed","skipped");
+        el.querySelector(".step-icon").textContent = id.replace("step","");
+        el.querySelector(".step-icon").style.background = "";
+      });
+      var current = 0;
+      document.getElementById(steps[0]).classList.add("active");
+      document.getElementById(steps[0]).querySelector(".step-icon").innerHTML = "&#9203;";
+      progressTimer = setInterval(function() {
+        if (current >= steps.length - 1) return;
+        var prev = document.getElementById(steps[current]);
+        prev.classList.remove("active"); prev.classList.add("done");
+        prev.querySelector(".step-icon").innerHTML = "&#10003;";
+        current++;
+        var next = document.getElementById(steps[current]);
+        next.classList.add("active");
+        next.querySelector(".step-icon").innerHTML = "&#9203;";
+      }, 2500);
+    }
+
+    function stopProgress(mode) {
+      /* mode: "success" = 全绿, "mismatch" = 闸门红叉后续灰, "error" = 全灰 */
+      if (progressTimer) { clearInterval(progressTimer); progressTimer = null; }
+      var steps = ["step1","step2","step3","step4","step5","step6"];
+
+      if (mode === "success") {
+        steps.forEach(function(id) {
+          var el = document.getElementById(id);
+          el.classList.remove("active"); el.classList.add("done");
+          el.querySelector(".step-icon").innerHTML = "&#10003;";
+        });
+        setTimeout(function() { assessProgress.classList.remove("show"); }, 1500);
+      } else if (mode === "mismatch") {
+        /* step1 完成, step2 红叉, step3-6 跳过 */
+        var s1 = document.getElementById("step1");
+        s1.classList.remove("active"); s1.classList.add("done");
+        s1.querySelector(".step-icon").innerHTML = "&#10003;";
+        var s2 = document.getElementById("step2");
+        s2.classList.remove("active"); s2.classList.add("failed");
+        s2.querySelector(".step-icon").innerHTML = "&#10060;";
+        s2.style.color = "#c62828";
+        for (var i = 2; i < 6; i++) {
+          var el = document.getElementById(steps[i]);
+          el.classList.add("skipped");
+          el.style.opacity = "0.3";
+          el.querySelector(".step-icon").innerHTML = "&#9940;";
+        }
+        /* 不自动隐藏, 让用户看到拦截位置 */
+      } else {
+        steps.forEach(function(id) {
+          var el = document.getElementById(id);
+          el.classList.remove("active");
+          el.style.opacity = "0.3";
+        });
+        setTimeout(function() { assessProgress.classList.remove("show"); }, 2000);
+      }
+    }
+
+    /* 渲染钢琴键盘 */
+    function renderKeyboard(data) {
+      var kb = document.getElementById("pianoKeyboard");
+      kb.innerHTML = "";
+      // Anh.114 用到的音域: G2(43) ~ D5(74), 显示 C3(48) ~ C5(72)
+      // 白键: C D E F G A B
+      var whiteOffsets = {0:"C",2:"D",4:"E",5:"F",7:"G",9:"A",11:"B"};
+      var blackOffsets = {1:"C#",3:"D#",6:"F#",8:"G#",10:"A#"};
+      var startMidi = 48; // C3
+      var endMidi = 74;   // D5
+      var notesPlayed = data.notesPlayed || {};
+      var notesExpected = data.notesExpected || {};
+
+      for (var midi = startMidi; midi <= endMidi; midi++) {
+        var pc = midi % 12;
+        if (whiteOffsets[pc]) {
+          var wk = document.createElement("div");
+          wk.className = "white-key";
+          wk.textContent = whiteOffsets[pc] + (Math.floor(midi/12)-1);
+          if (notesExpected[midi] && notesPlayed[midi]) wk.classList.add("correct");
+          else if (notesPlayed[midi] && !notesExpected[midi]) wk.classList.add("wrong");
+          else if (notesExpected[midi] && !notesPlayed[midi]) wk.classList.add("missed");
+          kb.appendChild(wk);
+        }
+      }
+      // 添加黑键 (绝对定位)
+      var whiteKeyWidth = 32;
+      var whiteCount = 0;
+      for (var midi2 = startMidi; midi2 <= endMidi; midi2++) {
+        var pc2 = midi2 % 12;
+        if (blackOffsets[pc2]) {
+          var bk = document.createElement("div");
+          bk.className = "black-key";
+          bk.style.left = (whiteCount * whiteKeyWidth - 10) + "px";
+          if (notesExpected[midi2] && notesPlayed[midi2]) bk.classList.add("correct");
+          else if (notesPlayed[midi2] && !notesExpected[midi2]) bk.classList.add("wrong");
+          else if (notesExpected[midi2] && !notesPlayed[midi2]) bk.classList.add("missed");
+          kb.appendChild(bk);
+        }
+        if (whiteOffsets[pc2]) whiteCount++;
+      }
+    }
+
+    /* 自动测评 (从录音自动转入) */
+    async function autoAssess(formData) {
+      assessBtn.disabled = true;
+      startProgress();
+      resultCard.classList.remove("show"); wrongSong.classList.remove("show"); truncationNotice.classList.remove("show");
+      try {
+        var res = await fetch("/api/assess", { method: "POST", body: formData });
+        var data = await res.json();
+        assessBtn.disabled = false;
+        if (!res.ok) { stopProgress("error"); alert("测评失败: " + (data.error || "未知错误")); return; }
+        if (!data.isCorrectSong) { stopProgress("mismatch"); showMismatch(data); return; }
+        stopProgress("success");
+        showResult(data);
+        statusEl.textContent = "测评完成"; statusEl.className = "status ready";
+      } catch(err) {
+        stopProgress("error");
+        assessBtn.disabled = false;
+        alert("测评请求失败: " + err.message);
+      }
+    }
+
+    assessBtn.onclick = async function() {
+      if (!selectedFile) return;
+      assessBtn.disabled = true;
+      startProgress();
+      resultCard.classList.remove("show"); wrongSong.classList.remove("show"); truncationNotice.classList.remove("show");
+      try {
+        var formData = new FormData(); formData.append("audio", selectedFile);
+        var res = await fetch("/api/assess", { method: "POST", body: formData });
+        var data = await res.json();
+        assessBtn.disabled = false;
+        if (!res.ok) { stopProgress("error"); alert("测评失败: " + (data.error || "未知错误")); return; }
+        if (!data.isCorrectSong) { stopProgress("mismatch"); showMismatch(data); return; }
+        stopProgress("success");
+        showResult(data);
+      } catch(err) { stopProgress("error"); assessBtn.disabled = false; alert("请求失败: " + err.message); }
+    };
+
+    /* 显示曲目不匹配 (不显示任何分数) */
+    function showMismatch(data) {
+      wrongSong.classList.add("show");
+      var reasons = data.reasons || [];
+      var suggestion = data.suggestion || "";
+      var userFeat = data.userFeatures || {};
+      var refFeat = data.refFeatures || {};
+      var similarity = data.similarity;
+
+      var html = '<div class="icon">&#9888;&#65039;</div>';
+      html += '<div class="msg">曲目不匹配，暂不评分</div>';
+      html += '<div style="text-align:left;max-width:450px;margin:12px auto;font-size:14px;color:#555;line-height:2;">';
+
+      // 检测摘要
+      html += '<div style="font-weight:700;color:#6b5b8a;margin-bottom:6px;">检测原因：</div>';
+      if (reasons.length > 0) {
+        reasons.forEach(function(r, i) {
+          html += '<div style="padding:4px 0;">' + (i+1) + '. ' + r + '</div>';
+        });
+      }
+      html += '</div>';
+
+      // 对比信息
+      if (userFeat.tempo || userFeat.meter) {
+        html += '<div style="text-align:left;max-width:450px;margin:12px auto;padding:12px;background:#f5f0f8;border-radius:10px;font-size:13px;color:#666;line-height:1.8;">';
+        html += '<b>你的音频：</b>' + (userFeat.tempo||'?') + 'BPM / ' + (userFeat.meter||'?') + '<br>';
+        html += '<b>目标曲目：</b>' + (refFeat.tempo||'?') + 'BPM / ' + (refFeat.meter||'?') + '（G大调小步舞曲 Anh.114）';
+        if (similarity !== undefined && similarity !== null) {
+          html += '<br><b>旋律匹配度：</b>' + Math.round(similarity * 100) + '%';
+        }
+        html += '</div>';
+      }
+
+      // 建议
+      if (suggestion) {
+        html += '<div class="hint" style="margin-top:12px;">' + suggestion + '</div>';
+      }
+
+      // 底部说明
+      html += '<div style="margin-top:12px;font-size:12px;color:#ccc;">本次不生成综合得分、五维评分和AI讲评</div>';
+
+      document.getElementById("wrongMsg").innerHTML = html;
+      // 确保结果区域隐藏
+      resultCard.classList.remove("show");
+    }
+
+    function showResult(data) {
+      var total = data.totalScore;
+      document.getElementById("totalScore").textContent = total;
+      var lv = levelText(total); var lvEl = document.getElementById("totalLevel"); lvEl.textContent = lv.text; lvEl.className = "total-level " + lv.cls;
+      if (data.truncated) {
+        truncationNotice.textContent = "音频较长(" + data.originalDuration + "秒), 已截取前" + data.duration + "秒进行分析";
+        truncationNotice.classList.add("show");
+      }
+      var dims = [ { key: "rhythm", name: "节奏稳定" }, { key: "pitch", name: "音高准确" }, { key: "fluency", name: "完整流畅" }, { key: "dynamics", name: "力度层次" }, { key: "expression", name: "音乐表现" } ];
+      var grid = document.getElementById("scoreGrid"); grid.innerHTML = "";
+      dims.forEach(function(d) {
+        var item = data.scores[d.key]; var color = scoreColor(item.score);
+        var div = document.createElement("div"); div.className = "score-item";
+        div.innerHTML = '<div class="name">' + d.name + '</div><div class="num" style="color:' + color + '">' + item.score + '分</div><div class="bar-wrap"><div class="bar" style="width:0%;background:' + color + '"></div></div><div class="comment">' + item.comment + '</div>';
+        grid.appendChild(div);
+        setTimeout(function() { div.querySelector(".bar").style.width = item.score + "%"; }, 100);
+      });
+      document.getElementById("commentText").textContent = data.comment || "";
+
+      /* 录音回放对比 */
+      if (selectedFile) {
+        document.getElementById("userPlayback").src = URL.createObjectURL(selectedFile);
+      }
+      document.getElementById("refPlayback").src = "/reference_audio.wav";
+
+      /* 钢琴键盘可视化 */
+      renderKeyboard(data);
+
+      /* 7层音乐体检报告 */
+      renderReport(data);
+
+      /* Tomplay练习建议 */
+      renderTomplayAdvice(data);
+
+      resultCard.classList.add("show");
+    }
+
+    /* 渲染5维度音乐体检报告 */
+    function renderReport(data) {
+      var r = data.report;
+      if (!r) return;
+      var el = document.getElementById("reportContent");
+      var bf = r.basicFeatures || {};
+      var st = r.style || {};
+      var ml = r.melody || {};
+      var rc = r.rhythmCompare || {};
+      var df = r.difficulty || {};
+      var em = r.emotion || {};
+      var issues = r.issues || [];
+      var scores = data.scores || {};
+      var html = "";
+
+      /* ===== 第一部分: 音乐特征对比 (5维度表格) ===== */
+      html += '<div style="font-weight:700;color:#6b5b8a;font-size:15px;margin-bottom:10px;">&#128202; 音乐特征对比</div>';
+      html += '<table class="compare-table"><thead><tr><th>&#32500;&#24230;</th><th>&#20320;&#30340;&#28436;&#22863;</th><th>&#26631;&#20934;&#28436;&#22863;</th></tr></thead><tbody>';
+
+      // 维度1: 节奏速度
+      html += '<tr><td class="dim-name">&#127881; &#33410;&#22863;&#36895;&#24230;</td>';
+      html += '<td>' + (bf.tempo||"-") + 'BPM / ' + (bf.meter||"-") + '<br><span class="sub">' + (bf.tempoStability > 0.7 ? "&#33410;&#22863;&#31283;&#23450;" : bf.tempoStability > 0.5 ? "&#33410;&#22863;&#20598;&#26377;&#27874;&#21160;" : "&#33410;&#22863;&#19981;&#31283;") + '</span></td>';
+      html += '<td>120BPM / 3/4<br><span class="sub">&#33410;&#22863;&#31283;&#23450;</span></td></tr>';
+
+      // 维度2: 旋律织体
+      html += '<tr><td class="dim-name">&#127932; &#26059;&#24459;&#32455;&#20307;</td>';
+      html += '<td>' + (ml.relation||"-") + '<br><span class="sub">' + (ml.leftRight||"") + '</span></td>';
+      html += '<td>&#26059;&#24459;&#28165;&#26224;,<#&#20132;&#32455;&#36866;&#24230;<br><span class="sub">&#21491;&#25163;&#26059;&#24459;&#20026;&#20027;,&#24038;&#25163;&#37197;&#21512;</span></td></tr>';
+
+      // 维度3: 力度音色
+      html += '<tr><td class="dim-name">&#128266; &#21147;&#24230;&#38899;&#33394;</td>';
+      html += '<td>' + (bf.volumeDesc||"-") + ' / ' + (bf.texture||"-") + '<br><span class="sub">&#21160;&#24577;&#33539;&#22260;' + (bf.volumeRange||"-") + '</span></td>';
+      html += '<td>&#24378;&#24369;&#21464;&#21270;&#36866;&#24230; / &#31616;&#21333;&#20132;&#32455;<br><span class="sub">&#21160;&#24577;&#33539;&#22260;0.66</span></td></tr>';
+
+      // 维度4: 风格情绪
+      html += '<tr><td class="dim-name">&#127917; &#39118;&#26684;&#24773;&#32490;</td>';
+      html += '<td>' + (st.style||"-") + '<br><span class="sub">' + (em.brightness||"") + ' / ' + (em.mood||"") + '</span></td>';
+      html += '<td>&#21476;&#20856;&#21551;&#33945;<br><span class="sub">&#26126;&#20142; / &#36731;&#24039;&#20248;&#38597;,&#20716;&#31461;&#21270;&#33310;&#26354;&#24863;</span></td></tr>';
+
+      // 维度5: 演奏质量
+      var pitchS = scores.pitch ? scores.pitch.score : "-";
+      var fluencyS = scores.fluency ? scores.fluency.score : "-";
+      var dynamicsS = scores.dynamics ? scores.dynamics.score : "-";
+      var exprS = scores.expression ? scores.expression.score : "-";
+      html += '<tr><td class="dim-name">&#127911; &#28436;&#22863;&#36136;&#37327;</td>';
+      html += '<td>&#38899;&#20934;' + pitchS + ' / &#27969;&#30021;' + fluencyS + '<br><span class="sub">&#21147;&#24230;' + dynamicsS + ' / &#34920;&#29616;' + exprS + '</span></td>';
+      html += '<td>&#38899;&#20934;100 / &#27969;&#30021;100<br><span class="sub">&#21147;&#24230;100 / &#34920;&#29616;100</span></td></tr>';
+
+      html += '</tbody></table>';
+
+      /* ===== 第二部分: 演奏问题分析 ===== */
+      html += '<div style="font-weight:700;color:#6b5b8a;font-size:15px;margin:20px 0 10px;">&#128270; &#28436;&#22863;&#38382;&#39064;&#20998;&#26512;</div>';
+      issues.forEach(function(i) {
+        var cls = i.level === "\u826F\u597D" ? "good" : (i.level === "\u8F7B\u5FAE" || i.level === "\u4E00\u822C" || i.level === "\u9700\u6539;&#8FDB" ? "minor" : "major");
+        var icon = i.level === "\u826F\u597D" ? "&#9989;" : (i.level === "\u8F7B&#5FAE" || i.level === "\u4E00&#822C" ? "&#9888;&#65039;" : "&#10060;");
+        html += '<div class="issue-item ' + cls + '">' + icon + ' <b>' + i.type + '</b> (' + i.level + '): ' + i.desc + '</div>';
+      });
+
+      /* ===== 第三部分: 练习建议 ===== */
+      html += '<div style="font-weight:700;color:#6b5b8a;font-size:15px;margin:20px 0 10px;">&#128221; &#32451;&#20064;&#24314;&#35758;</div>';
+      html += '<div class="advice-box">';
+      var advice = [];
+
+      // 根据问题生成建议
+      issues.forEach(function(i) {
+        if (i.type === "\u8282;&#22863;" && i.level !== "\u826F;&#22909;") {
+          advice.push("&#127911; &#29992;&#33410;&#25293;&#22120;&#20174;60%&#36895;&#24230;&#24320;&#22987;&#32451;&#20064;,&#31283;&#20303;&#25293;&#28857;&#21518;&#20877;&#21152;&#36895;");
+        }
+        if (i.type === "\u36895;&#24230;" && i.level !== "\u826F;&#22909;") {
+          advice.push("&#9201; &#23545;&#30528;&#26631;&#20934;&#28418;&#22863;&#21548;&#20960;&#36947;,&#25214;&#20934;&#36895;&#24230;&#24863;&#21518;&#20877;&#24377;");
+        }
+        if (i.type === "\#27969;&#30021;&#24615;" && i.level !== "\u826F;&#22909;") {
+          advice.push("&#128260; &#25226;&#22256;&#38590;&#23567;&#33410;&#21333;&#29420;&#32451;,&#29087;&#32451;&#21518;&#20877;&#36830;&#36143;&#28436;&#22863;");
+        }
+        if (i.type === "&#21147;&#24230;&#24179;&#34913;" && i.level !== "&#826F;&#22909;") {
+          advice.push("&#12444; &#21491;&#25163;&#26059;&#24459;&#21152;&#24378;,&#24038;&#25163;&#20132;&#32455;&#25918;&#26494;,&#35753;&#26059;&#24459;&#20687;&#22312;&#26368;&#19978;&#38754;");
+        }
+        if (i.type === "&#38899;&#20048;&#34920;&#29616;" && i.level !== "&#826F;&#22909;") {
+          advice.push("&#127925; &#22810;&#21548;&#31034;&#33539;&#24405;&#38899;,&#24863;&#21463;&#24378;&#24369;&#25293;&#30340;&#36215;&#20239;,&#21152;&#24378;&#38899;&#20048;&#34920;&#29616;&#21147;");
+        }
+      });
+
+      // 根据风格和难度补充
+      if (df.level === "\u9AD8;") {
+        advice.push("&#128214; &#36825;&#39318;&#26354;&#23376;&#38656;&#27714;&#39640;,&#24314;&#35758;&#20998;&#27573;&#32451;&#20064;,&#27599;&#27573;&#21482;&#32451;4-8&#23567;&#33410;");
+      } else if (df.level === "\u4F4E;") {
+        advice.push("&#128214; &#36825;&#39318;&#26354;&#23376;&#36866;&#21512;&#21551;&#33945;,&#25918;&#26494;&#32451;,&#20139;&#21463;&#38899;&#20048;&#30340;&#20048;&#36259;");
+      }
+
+      if (advice.length === 0) {
+        advice.push("&#127881; &#28418;&#22863;&#24456;&#26834;,&#32487;&#32493;&#20445;&#25345;,&#21487;&#20197;&#23581;&#35797;&#26356;&#39640;&#30340;&#38899;&#20048;&#34920;&#29616;");
+      }
+
+      advice.forEach(function(a, idx) {
+        html += '<div class="advice-item">' + (idx+1) + ". " + a + '</div>';
+      });
+
+      html += '</div>';
+
+      el.innerHTML = html;
+      document.getElementById("reportSection").classList.add("show");
+    }
+
+    /* 根据AI测评结果生成Tomplay练习建议 */
+    function renderTomplayAdvice(data) {
+      var advice = [];
+      var scores = data.scores || {};
+      var issues = (data.report || {}).issues || [];
+
+      // 根据每个维度的分数生成建议
+      if (scores.rhythm && scores.rhythm.score < 85) {
+        advice.push({
+          icon: "&#9201;", title: "慢速+节拍器",
+          desc: "节奏不够稳定, 建议在Tomplay中打开Metronome, 速度调至70-80BPM",
+          detail: "重点保持3/4拍强-弱-弱的感觉"
+        });
+      }
+      if (scores.pitch && scores.pitch.score < 85) {
+        advice.push({
+          icon: "&#127925;", title: "慢速看谱练",
+          desc: "音高有偏差, 建议在Tomplay中放慢速度, 逐音检查右手旋律",
+          detail: "注意G大调的F#要弹黑键"
+        });
+      }
+      if (scores.fluency && scores.fluency.score < 85) {
+        advice.push({
+          icon: "&#128260;", title: "片段循环",
+          desc: "演奏有停顿, 建议在Tomplay中循环第1-4小节反复练习",
+          detail: "熟练后再连贯演奏全曲"
+        });
+      }
+      // 力度平衡问题
+      var dynIssue = issues.find(function(i) { return i.type === "力度平衡" && i.level !== "良好"; });
+      if (dynIssue || (scores.dynamics && scores.dynamics.score < 85)) {
+        advice.push({
+          icon: "&#128064;", title: "分手练习",
+          desc: "左手偏重盖住右手, 建议在Tomplay中先听右手旋律, 再轻弹左手",
+          detail: "右手像小歌唱家, 左手轻轻陪伴"
+        });
+      }
+      // 表现力问题
+      if (scores.expression && scores.expression.score < 80) {
+        advice.push({
+          icon: "&#127917;", title: "听示范录音",
+          desc: "音乐表现力不足, 建议在Tomplay中先听一遍标准示范",
+          detail: "感受小步舞曲轻巧优雅的舞步感"
+        });
+      }
+
+      // 如果没有问题, 给肯定建议
+      if (advice.length === 0) {
+        advice.push({
+          icon: "&#127881;", title: "保持并提速",
+          desc: "各维度表现较好, 建议在Tomplay中尝试120BPM原速演奏",
+          detail: "可以挑战更丰富的音乐表现"
+        });
+      }
+
+      // 渲染卡片
+      var html = "";
+      advice.forEach(function(a) {
+        html += '<div class="tomplay-card">';
+        html += '<div class="tc-icon">' + a.icon + '</div>';
+        html += '<div class="tc-title">' + a.title + '</div>';
+        html += '<div class="tc-desc">' + a.desc + '</div>';
+        html += '<div class="tc-detail">' + a.detail + '</div>';
+        html += '</div>';
+      });
+      document.getElementById("tomplayCards").innerHTML = html;
+      document.getElementById("tomplaySection").classList.add("show");
+    }
+
+    /* 初始化: API状态检测 */
+    var apiStatusBar = document.getElementById("apiStatusBar");
+    var apiLight = document.getElementById("apiLight");
+    var apiStatusText = document.getElementById("apiStatusText");
+    fetch("/api/health").then(function(r) { return r.json(); }).then(function(data) {
+      if (data.apiKeyConfigured) {
+        apiStatusBar.className = "api-status-bar connected";
+        apiLight.innerHTML = "&#128994;";
+        apiStatusText.textContent = "智能体已连接";
+      } else {
+        apiStatusBar.className = "api-status-bar error";
+        apiLight.innerHTML = "&#128308;";
+        apiStatusText.textContent = "智能体未连接, 请检查 API Key 配置";
+      }
+    }).catch(function() {
+      apiStatusBar.className = "api-status-bar error";
+      apiLight.innerHTML = "&#128308;";
+      apiStatusText.textContent = "无法连接服务器, 请稍后重试";
+    });
+    if (window.speechSynthesis) { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = function() { window.speechSynthesis.getVoices(); }; }
+  </script>
+  <div style="text-align:center;padding:12px;font-size:11px;color:#ccc;">版本：v0.5.0-state-fix</div>
+</body>
+</html>
