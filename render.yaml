@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: qinyue-ai-tutor
+    runtime: node
+    plan: free
+    buildCommand: npm install && pip3 install librosa pretty_midi flask dtw-python speech_recognition pydub --break-system-packages
+    startCommand: bash start.sh
+    envVars:
+      - key: YUANQI_API_KEY
+        value: XAG5rI40SS5zgvmVCr8RAuG9YAAkcJeT
+      - key: YUANQI_API_URL
+        value: https://yuanqi.tencent.com/openapi/v1/agent/chat/completions
+      - key: YUANQI_ASSISTANT_ID
+        value: 2070835229588909120
+      - key: NODE_OPTIONS
+        value: ""
