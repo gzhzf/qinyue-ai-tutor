@@ -924,7 +924,7 @@ def analyze():
                     D_noshift, wp_noshift = _dtw(X=ref_norm_gate, Y=perf_norm_gate, metric='cosine')
                     dtw_cost_noshift = float(D_noshift[-1, -1] / len(wp_noshift))
                     dtw_sim_noshift = max(0, min(1, 1 - dtw_cost_noshift * 2))
-                    if dtw_sim_noshift < 0.25:
+                    if dtw_sim_noshift < 0.25 and cos_sim_val < 0.85:
                         veto_triggered = True
                         veto_reasons.append(f"旋律匹配度仅{dtw_sim_noshift:.0%}(无转调), 主旋律轮廓与Anh.114不一致")
             except: pass
