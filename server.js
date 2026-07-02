@@ -213,17 +213,35 @@ app.post("/api/assess", upload.single("audio"), async (req, res) => {
 
     let pyResponse;
     try {
-      pyResponse = await fetch("http://localhost:5001/analyze", {
-        method: "POST",
-        body: formData,
-        signal: AbortSignal.timeout(60000),
-      });
+      // 重试3次, 每次间隔5秒
+      for (let attempt = 1; attempt <= 3; attempt++) {
+        try {
+          pyResponse = await fetch("http://127.0.0.1:5001/analyze", {
+            method: "POST",
+            body: formData,
+            signal: AbortSignal.timeout(90000),
+          });
+          if (pyResponse.ok || pyResponse.status === 400) break;
+        } catch(e) {
+          console.log(`[assess] 第${attempt}次连接Python失败: ${e.message}`);
+          if (attempt < 3) {
+            // 重新创建formData (之前的已被消费)
+            const retryForm = new FormData();
+            const retryBlob = new Blob([req.file.buffer], { type: req.file.mimetype });
+            retryForm.append("audio", retryBlob, req.file.originalname || "audio.wav");
+            formData.delete("audio");
+            formData.append("audio", retryBlob, req.file.originalname || "audio.wav");
+            await new Promise(r => setTimeout(r, 5000));
+          }
+        }
+      }
+      if (!pyResponse) throw new Error("3次重试均失败");
     } catch(fetchErr) {
       console.error("[assess] Python微服务连接失败:", fetchErr.message);
       return res.status(503).json({
         error: "音频分析服务暂不可用",
-        detail: "Python分析微服务未启动, 可能内存不足。请稍后重试或使用本地版本。",
-        suggestion: "如果持续出现此问题, 建议升级Render计划至Starter(1GB内存)。",
+        detail: "Python分析微服务未启动, 请稍后重试。",
+        suggestion: "首次访问需等待30秒唤醒, 请刷新页面后再试。",
       });
     }
 
