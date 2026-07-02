@@ -211,10 +211,21 @@ app.post("/api/assess", upload.single("audio"), async (req, res) => {
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype });
     formData.append("audio", blob, req.file.originalname || "audio.wav");
 
-    const pyResponse = await fetch("http://localhost:5001/analyze", {
-      method: "POST",
-      body: formData,
-    });
+    let pyResponse;
+    try {
+      pyResponse = await fetch("http://localhost:5001/analyze", {
+        method: "POST",
+        body: formData,
+        signal: AbortSignal.timeout(60000),
+      });
+    } catch(fetchErr) {
+      console.error("[assess] Python微服务连接失败:", fetchErr.message);
+      return res.status(503).json({
+        error: "音频分析服务暂不可用",
+        detail: "Python分析微服务未启动, 可能内存不足。请稍后重试或使用本地版本。",
+        suggestion: "如果持续出现此问题, 建议升级Render计划至Starter(1GB内存)。",
+      });
+    }
 
     const analysis = await pyResponse.json();
 
