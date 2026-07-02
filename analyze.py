@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """
-琴乐启蒙AI导师 - 钢琴演奏音频分析微服务 (音乐体检版)
+琴乐启蒙AI导师 - 钢琴演奏音频分析微服务 (音乐体检版) - 轻量版
+使用纯numpy+ffmpeg替代librosa, 适合Render Free 512MB内存
 7层分析: 基础特征 → 风格判断 → 旋律伴奏 → 节奏对比 → 技术难度 → 情绪表现 → 演奏诊断
 """
 
+import numpy as np
+import subprocess
 import os
 import sys
 import tempfile
-import numpy as np
-import librosa
+import json
+import functools
 import pretty_midi
 from flask import Flask, request, jsonify
-from dtw import dtw
 
 # 强制stdout不缓冲
-import functools
 print = functools.partial(print, flush=True)
 
 app = Flask(__name__)
@@ -28,6 +29,275 @@ _ref_scores = None
 _ref_features = None
 _last_best_shift = 0
 _ref_notes_set = None
+
+# ==================== 纯numpy音频工具 (替代librosa) ====================
+N_FFT = 2048
+HOP_LENGTH = 512
+
+def _load_audio(path, sr=22050):
+    """替代 librosa.load(path, sr=22050, mono=True) — 用ffmpeg解码为float32"""
+    proc = subprocess.run(
+        ["ffmpeg", "-y", "-i", path, "-f", "s16le", "-ar", str(sr), "-ac", "1", "-"],
+        capture_output=True, timeout=300,
+    )
+    if len(proc.stdout) == 0:
+        raise RuntimeError(
+            "ffmpeg解码失败: " + proc.stderr.decode("utf-8", errors="ignore")[:300]
+        )
+    y = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+    return y, sr
+
+def _rms(y, frame_length=512, hop_length=512):
+    """替代 librosa.feature.rms(y=y)[0]
+    按规格: np.array([np.sqrt(np.mean(y[i:i+512]**2)) for i in range(0, len(y)-512, 512)])
+    对极短音频做了保底"""
+    if len(y) == 0:
+        return np.zeros(0, dtype=np.float32)
+    if len(y) <= frame_length:
+        return np.array([float(np.sqrt(np.mean(y.astype(np.float64) ** 2)))], dtype=np.float32)
+    return np.array(
+        [float(np.sqrt(np.mean(y[i:i + frame_length].astype(np.float64) ** 2)))
+         for i in range(0, len(y) - frame_length, hop_length)],
+        dtype=np.float32,
+    )
+
+def _chroma_cqt(y, sr=22050, hop_length=HOP_LENGTH, n_fft=N_FFT):
+    """替代 librosa.feature.chroma_cqt — FFT实现12音级色谱
+    对每帧做FFT, 把频率>80Hz的bin映射到pc=midi%12, 累加频谱能量"""
+    if len(y) == 0:
+        return np.zeros((12, 1), dtype=np.float32)
+    if len(y) < n_fft:
+        y = np.pad(y, (0, n_fft - len(y)))
+    n_frames = 1 + (len(y) - n_fft) // hop_length
+    if n_frames < 1:
+        n_frames = 1
+
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+    valid_mask = freqs > 80
+    valid_idx = np.where(valid_mask)[0]
+    valid_freqs = freqs[valid_mask]
+    midi = 69.0 + 12.0 * np.log2(valid_freqs / 440.0)
+    pc = np.mod(np.round(midi).astype(int), 12)
+
+    n_bins = len(freqs)
+    mapping = np.zeros((12, n_bins), dtype=np.float32)
+    for p, idx in zip(pc, valid_idx):
+        mapping[p, idx] += 1.0
+
+    chroma = np.zeros((12, n_frames), dtype=np.float32)
+    win = np.hanning(n_fft).astype(np.float32)
+    for i in range(n_frames):
+        frame = y[i * hop_length: i * hop_length + n_fft] * win
+        spec = np.abs(np.fft.rfft(frame))
+        chroma[:, i] = mapping @ (spec.astype(np.float32) ** 2)
+
+    norms = np.linalg.norm(chroma, axis=0, keepdims=True) + 1e-9
+    chroma = chroma / norms
+    return chroma
+
+def _beat_track(y, sr=22050, hop_length=HOP_LENGTH):
+    """替代 librosa.beat.beat_track — 找RMS峰值, 由峰值间隔得到tempo
+    返回 (tempo: float, beat_frames: np.ndarray[int])"""
+    rms = _rms(y, hop_length=hop_length)
+    if len(rms) < 4:
+        return 120.0, np.array([0, max(1, len(rms) // 2)], dtype=int)
+    threshold = float(np.mean(rms))
+    peaks = []
+    for i in range(1, len(rms) - 1):
+        v = rms[i]
+        if v > threshold and v >= rms[i - 1] and v >= rms[i + 1]:
+            peaks.append(i)
+    if len(peaks) < 2:
+        beat_frames = np.array(
+            list(range(0, len(rms), max(1, len(rms) // 4))), dtype=int
+        )
+        return 120.0, beat_frames
+    peak_frames = np.array(peaks, dtype=int)
+    intervals = np.diff(peak_frames)
+    avg_interval_sec = float(np.mean(intervals)) * hop_length / sr
+    if avg_interval_sec <= 0:
+        return 120.0, peak_frames
+    tempo = 60.0 / avg_interval_sec
+    return float(tempo), peak_frames
+
+def _onset_detect(y, sr=22050, hop_length=HOP_LENGTH):
+    """替代 librosa.onset.onset_detect — 找RMS突增点"""
+    rms = _rms(y, hop_length=hop_length)
+    if len(rms) < 2:
+        return np.array([], dtype=int)
+    diff = np.diff(rms)
+    mean_diff = float(np.mean(diff)) + 1e-9
+    onsets = np.where(diff > mean_diff * 3.0)[0] + 1
+    return onsets.astype(int)
+
+def _trim(y, top_db=30):
+    """替代 librosa.effects.trim — 找首个/末个 |y|>max*0.03, 截取中间
+    返回 (y_trimmed, np.array([start, end]))"""
+    if len(y) == 0:
+        return y, np.array([0, 0])
+    threshold = float(np.max(np.abs(y))) * 0.03
+    if threshold <= 0:
+        return y, np.array([0, len(y) - 1])
+    indices = np.where(np.abs(y) > threshold)[0]
+    if len(indices) == 0:
+        return y, np.array([0, len(y) - 1])
+    start = int(indices[0])
+    end = int(indices[-1])
+    return y[start:end + 1], np.array([start, end])
+
+def _hpss(y):
+    """替代 librosa.effects.hpss — 跳过谐波分离, 返回 (y, zeros)"""
+    return y, np.zeros_like(y)
+
+def _dtw(X, Y, metric='cosine'):
+    """替代 librosa.sequence.dtw — 纯numpy实现DTW
+    X: (12, n), Y: (12, m), 返回 (D: (n, m), wp: (path_len, 2))
+    D[-1,-1] 为总累积距离, len(wp) 为路径长度
+    内层用 numpy 向量化 (cumsum + minimum.accumulate), 外层逐行 Python 循环"""
+    n = X.shape[1]
+    m = Y.shape[1]
+    if n == 0 or m == 0:
+        D = np.zeros((max(1, n), max(1, m)), dtype=np.float64)
+        wp = np.array([[max(0, n - 1), max(0, m - 1)]], dtype=int)
+        return D, wp
+
+    Xn = X / (np.linalg.norm(X, axis=0, keepdims=True) + 1e-9)
+    Yn = Y / (np.linalg.norm(Y, axis=0, keepdims=True) + 1e-9)
+    sim = Xn.T @ Yn  # (n, m) 余弦相似度
+    dist = np.clip(1.0 - sim, 0.0, 2.0).astype(np.float64)
+
+    D = np.full((n, m), np.inf, dtype=np.float64)
+    D[0, 0] = dist[0, 0]
+    D[0, :] = np.cumsum(dist[0, :])
+    for i in range(1, n):
+        D[i, 0] = D[i - 1, 0] + dist[i, 0]
+
+    # 逐行用向量化推递推 D[i,j] = dist[i,j] + min(D[i-1,j], D[i,j-1], D[i-1,j-1])
+    # 令 tmp[j] = dist[i,j] + min(D[i-1,j], D[i-1,j-1])  (j=0时 prev_padded=inf)
+    # 则 D[i,j] = min(tmp[j], D[i,j-1] + dist[i,j])
+    # 通过 cumsum(C) + minimum.accumulate 一次算完整行
+    for i in range(1, n):
+        prev_row = D[i - 1, :]
+        prev_padded = np.empty_like(prev_row)
+        prev_padded[0] = np.inf
+        prev_padded[1:] = prev_row[:-1]
+        tmp = dist[i, :] + np.minimum(prev_row, prev_padded)
+        C = np.cumsum(dist[i, :])
+        G = tmp - C
+        E = np.minimum.accumulate(G)
+        D[i, :] = E + C
+
+    # 回溯路径: 从 (n-1, m-1) 走回 (0, 0)
+    wp = []
+    i, j = n - 1, m - 1
+    wp.append((i, j))
+    while i > 0 or j > 0:
+        if i == 0:
+            j -= 1
+        elif j == 0:
+            i -= 1
+        else:
+            choices = (D[i - 1, j], D[i, j - 1], D[i - 1, j - 1])
+            c = int(np.argmin(choices))
+            if c == 0:
+                i -= 1
+            elif c == 1:
+                j -= 1
+            else:
+                i -= 1
+                j -= 1
+        wp.append((i, j))
+    wp = np.array(wp[::-1], dtype=int)
+    return D, wp
+
+def _normalize(x, axis=0):
+    """替代 librosa.util.normalize(x, axis=0)"""
+    return x / (np.linalg.norm(x, axis=axis, keepdims=True) + 1e-9)
+
+def _spectral_centroid(y, sr=22050, n_fft=N_FFT, hop_length=HOP_LENGTH):
+    """替代 librosa.feature.spectral_centroid — FFT频谱质心, 返回 (1, n_frames)"""
+    if len(y) == 0:
+        return np.zeros((1, 1), dtype=np.float32)
+    if len(y) < n_fft:
+        y = np.pad(y, (0, n_fft - len(y)))
+    n_frames = 1 + (len(y) - n_fft) // hop_length
+    if n_frames < 1:
+        n_frames = 1
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+    win = np.hanning(n_fft).astype(np.float32)
+    centroids = np.zeros(n_frames, dtype=np.float32)
+    for i in range(n_frames):
+        frame = y[i * hop_length: i * hop_length + n_fft] * win
+        spec = np.abs(np.fft.rfft(frame))
+        total = float(np.sum(spec)) + 1e-9
+        centroids[i] = float(np.sum(freqs * spec)) / total
+    return centroids.reshape(1, -1)
+
+def _spectral_bandwidth(y, sr=22050, n_fft=N_FFT, hop_length=HOP_LENGTH):
+    """替代 librosa.feature.spectral_bandwidth — FFT频谱带宽, 返回 (1, n_frames)"""
+    if len(y) == 0:
+        return np.zeros((1, 1), dtype=np.float32)
+    if len(y) < n_fft:
+        y = np.pad(y, (0, n_fft - len(y)))
+    n_frames = 1 + (len(y) - n_fft) // hop_length
+    if n_frames < 1:
+        n_frames = 1
+    freqs = np.fft.rfftfreq(n_fft, 1.0 / sr)
+    win = np.hanning(n_fft).astype(np.float32)
+    bws = np.zeros(n_frames, dtype=np.float32)
+    for i in range(n_frames):
+        frame = y[i * hop_length: i * hop_length + n_fft] * win
+        spec = np.abs(np.fft.rfft(frame))
+        total = float(np.sum(spec)) + 1e-9
+        centroid = float(np.sum(freqs * spec)) / total
+        bws[i] = float(np.sum(np.abs(freqs - centroid) * spec)) / total
+    return bws.reshape(1, -1)
+
+def _stft(y, n_fft=N_FFT, hop_length=HOP_LENGTH):
+    """替代 librosa.stft — 逐帧 np.fft.rfft(y[i:i+2048] * np.hanning(2048))
+    返回 shape (n_fft//2+1, n_frames) complex"""
+    n_bins = n_fft // 2 + 1
+    if len(y) == 0:
+        return np.zeros((n_bins, 1), dtype=complex)
+    if len(y) < n_fft:
+        y = np.pad(y, (0, n_fft - len(y)))
+    n_frames = 1 + (len(y) - n_fft) // hop_length
+    if n_frames < 1:
+        n_frames = 1
+    win = np.hanning(n_fft).astype(np.float32)
+    out = np.zeros((n_bins, n_frames), dtype=complex)
+    for i in range(n_frames):
+        out[:, i] = np.fft.rfft(y[i * hop_length: i * hop_length + n_fft] * win)
+    return out
+
+def _fft_frequencies(sr=22050, n_fft=N_FFT):
+    """替代 librosa.fft_frequencies(sr=sr)"""
+    return np.fft.rfftfreq(n_fft, 1.0 / sr)
+
+def _frames_to_time(frames, sr=22050, hop_length=HOP_LENGTH):
+    """替代 librosa.frames_to_time(frames, sr=sr)"""
+    return np.array(frames, dtype=float) * hop_length / sr
+
+def _sync(data, frames, aggregate=np.mean):
+    """替代 librosa.util.sync(chroma, beats_frames, aggregate=np.mean) — 对每个区间取mean"""
+    frames = np.asarray(frames)
+    if len(frames) < 2:
+        return data[:, :1] if data.shape[1] > 0 else data
+    out = np.zeros((data.shape[0], len(frames) - 1), dtype=data.dtype)
+    for i in range(len(frames) - 1):
+        s, e = int(frames[i]), int(frames[i + 1])
+        if e <= s:
+            e = s + 1
+        if e > data.shape[1]:
+            e = data.shape[1]
+        if e <= s:
+            out[:, i] = 0
+        else:
+            out[:, i] = aggregate(data[:, s:e], axis=1)
+    return out
+
+
+# ==================== 以下为原 analyze.py 业务逻辑 (librosa 调用全部替换为 helper) ====================
 
 def synth_midi_simple(pm, fs=22050):
     duration = pm.get_end_time()
@@ -50,8 +320,8 @@ def get_reference_chroma():
     if _ref_chroma is not None: return _ref_chroma
     try:
         if os.path.exists(REFERENCE_AUDIO):
-            y, sr = librosa.load(REFERENCE_AUDIO, sr=22050, mono=True)
-            _ref_chroma = librosa.feature.chroma_cqt(y=y, sr=22050, hop_length=512)
+            y, sr = _load_audio(REFERENCE_AUDIO, sr=22050)
+            _ref_chroma = _chroma_cqt(y=y, sr=22050, hop_length=512)
             print(f"[ref] chroma loaded, shape={_ref_chroma.shape}")
             return _ref_chroma
         pm = pretty_midi.PrettyMIDI(REFERENCE_MIDI)
@@ -60,7 +330,7 @@ def get_reference_chroma():
             if len(audio) == 0: audio = synth_midi_simple(pm)
         except Exception:
             audio = synth_midi_simple(pm)
-        _ref_chroma = librosa.feature.chroma_cqt(y=audio, sr=22050, hop_length=512)
+        _ref_chroma = _chroma_cqt(y=audio, sr=22050, hop_length=512)
         return _ref_chroma
     except Exception as e:
         print(f"[ref] chroma load failed: {e}")
@@ -69,10 +339,9 @@ def get_reference_chroma():
 def extract_basic_features(y, sr):
     """第1层: 基础音频特征"""
     try:
-        # 速度
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+        tempo, beat_frames = _beat_track(y=y, sr=sr)
         tempo = float(tempo)
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+        beat_times = _frames_to_time(beat_frames, sr=sr)
         if len(beat_times) >= 2:
             intervals = np.diff(beat_times)
             tempo_stability = 1.0 - min(1.0, float(np.std(intervals) / (np.mean(intervals) + 1e-6)))
@@ -81,10 +350,8 @@ def extract_basic_features(y, sr):
 
         # 节拍判断 (3/4 vs 4/4 vs 2/4)
         if len(beat_frames) >= 8:
-            # 检测强弱拍周期
-            rms = librosa.feature.rms(y=y)[0]
+            rms = _rms(y=y)
             beat_rms = [rms[min(f, len(rms)-1)] for f in beat_frames]
-            # 看每3拍或4拍是否有强弱重复
             group3 = [np.mean(beat_rms[i:i+3]) - np.mean(beat_rms[i+1:i+4]) if i+4 <= len(beat_rms) else 0 for i in range(0, len(beat_rms)-3, 1)]
             group4 = [np.mean(beat_rms[i:i+4]) - np.mean(beat_rms[i+1:i+5]) if i+5 <= len(beat_rms) else 0 for i in range(0, len(beat_rms)-4, 1)]
             if abs(np.mean(group3)) > abs(np.mean(group4)):
@@ -95,13 +362,13 @@ def extract_basic_features(y, sr):
             meter = "未知"
 
         # 音区 (频谱质心)
-        spectral_centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
+        spectral_centroid = float(np.mean(_spectral_centroid(y=y, sr=sr)))
         if spectral_centroid > 3000: register = "偏高音区"
         elif spectral_centroid > 1500: register = "中音区"
         else: register = "偏低音区"
 
         # 音量
-        rms = librosa.feature.rms(y=y)[0]
+        rms = _rms(y=y)
         avg_volume = float(np.mean(rms))
         volume_range = float(np.std(rms) / (np.mean(rms) + 1e-6))
         if volume_range > 0.4: volume_desc = "强弱变化大"
@@ -109,14 +376,14 @@ def extract_basic_features(y, sr):
         else: volume_desc = "音量较平"
 
         # 音符密度 (onset检测)
-        onset_frames = librosa.onset.onset_detect(y=y, sr=sr)
+        onset_frames = _onset_detect(y=y, sr=sr)
         onset_rate = float(len(onset_frames) / (len(y) / sr))
         if onset_rate > 4: density = "密集"
         elif onset_rate > 2: density = "适中"
         else: density = "稀疏"
 
         # 声音厚度 (频谱带宽)
-        bandwidth = float(np.mean(librosa.feature.spectral_bandwidth(y=y, sr=sr)))
+        bandwidth = float(np.mean(_spectral_bandwidth(y=y, sr=sr)))
         if bandwidth > 2500: texture = "厚重和弦/复杂织体"
         elif bandwidth > 1500: texture = "简单伴奏"
         else: texture = "单旋律线条"
@@ -135,21 +402,16 @@ def extract_basic_features(y, sr):
 def classify_style(f):
     """第2层: 音乐风格判断"""
     score = {"古典启蒙": 0, "巴赫复调": 0, "浪漫派": 0, "炫技练习曲": 0, "现代派": 0}
-    # 古典启蒙: 速度适中+旋律规整+伴奏简单
     if 100 <= f["tempo"] <= 140: score["古典启蒙"] += 2
     if f["texture"] == "简单伴奏": score["古典启蒙"] += 2
     if f["density"] == "适中": score["古典启蒙"] += 1
-    # 巴赫复调: 厚重织体+速度稳定+3/4拍
     if f["texture"] in ["厚重和弦/复杂织体", "简单伴奏"]: score["巴赫复调"] += 1
     if f["tempoStability"] > 0.7: score["巴赫复调"] += 2
     if f["meter"] == "3/4": score["巴赫复调"] += 2
-    # 浪漫派: 速度变化+音量变化大
     if f["tempoStability"] < 0.6: score["浪漫派"] += 1
     if f["volumeRange"] > 0.4: score["浪漫派"] += 2
-    # 炫技: 密集+快
     if f["density"] == "密集": score["炫技练习曲"] += 2
     if f["tempo"] > 150: score["炫技练习曲"] += 2
-    # 现代派: 不确定, 默认低
     best = max(score, key=score.get)
     return {"style": best, "scores": score, "desc": {
         "古典启蒙": "结构清楚、旋律规整、伴奏简单", "巴赫复调": "复调线条、多声部进行",
@@ -159,14 +421,12 @@ def classify_style(f):
 def analyze_melody_accompaniment(y, sr):
     """第3层: 旋律与伴奏关系"""
     try:
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
-        # 主导音的连续性 (旋律是否清晰)
+        chroma = _chroma_cqt(y=y, sr=sr, hop_length=512)
         dominant = np.argmax(chroma, axis=0)
         changes = np.sum(np.diff(dominant) != 0)
         melody_clarity = 1.0 - min(1.0, changes / max(len(dominant), 1) * 3)
-        # 频段分离: 高频=旋律, 低频=伴奏
-        spec = np.abs(librosa.stft(y))
-        freqs = librosa.fft_frequencies(sr=sr)
+        spec = np.abs(_stft(y))
+        freqs = _fft_frequencies(sr=sr)
         high_mask = freqs > 1000
         low_mask = (freqs > 100) & (freqs <= 1000)
         high_energy = float(np.mean(spec[high_mask, :]))
@@ -216,7 +476,6 @@ def assess_difficulty(f, chroma=None):
     elif f["density"] == "适中": level += 1
     if f["volumeRange"] > 0.4: level += 2; reasons.append("强弱变化大, 音色控制难")
     if f["texture"] == "厚重和弦/复杂织体": level += 2; reasons.append("多声部复杂, 听觉和控制难")
-    # 大跳检测
     try:
         if chroma is not None:
             jumps = np.sum(np.abs(np.diff(np.argmax(chroma, axis=0))) > 5)
@@ -230,11 +489,10 @@ def assess_difficulty(f, chroma=None):
 def assess_emotion(y, sr):
     """第6层: 情绪和表现"""
     try:
-        centroid = float(np.mean(librosa.feature.spectral_centroid(y=y, sr=sr)))
-        rms = librosa.feature.rms(y=y)[0]
+        centroid = float(np.mean(_spectral_centroid(y=y, sr=sr)))
+        rms = _rms(y=y)
         energy_var = float(np.std(rms))
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
-        # 大调(明亮) vs 小调(暗淡): 看C和C#的能量比
+        chroma = _chroma_cqt(y=y, sr=sr, hop_length=512)
         major_energy = float(chroma[0].mean() + chroma[2].mean() + chroma[4].mean() + chroma[7].mean() + chroma[9].mean() + chroma[11].mean()) if chroma.shape[0] > 11 else 0.5
         minor_energy = float(chroma[1].mean() + chroma[3].mean() + chroma[5].mean() + chroma[6].mean() + chroma[8].mean() + chroma[10].mean()) if chroma.shape[0] > 11 else 0.5
         is_bright = major_energy > minor_energy
@@ -255,19 +513,16 @@ def assess_emotion(y, sr):
 def diagnose_issues(user_feat, ref_feat, y, sr):
     """第7层: 演奏问题诊断"""
     issues = []
-    # 节奏问题
     if user_feat["tempoStability"] < 0.6:
         issues.append({"type": "节奏", "level": "明显", "desc": "节奏不够稳定, 可能有拖拍或抢拍, 建议用节拍器练习"})
     elif user_feat["tempoStability"] < 0.8:
         issues.append({"type": "节奏", "level": "轻微", "desc": "节奏偶有波动, 整体可控"})
     else:
         issues.append({"type": "节奏", "level": "良好", "desc": "节奏稳定, 拍点清晰"})
-    # 速度问题
     tempo_diff = abs(user_feat["tempo"] - ref_feat["tempo"])
     if tempo_diff > 20:
         issues.append({"type": "速度", "level": "明显", "desc": f"速度与标准差异大({'偏快' if user_feat['tempo'] > ref_feat['tempo'] else '偏慢'}{tempo_diff:.0f}BPM)"})
-    # 流畅性
-    rms = librosa.feature.rms(y=y)[0]
+    rms = _rms(y=y)
     silence_ratio = float(np.sum(rms < np.max(rms) * 0.12) / max(len(rms), 1))
     if silence_ratio > 0.25:
         issues.append({"type": "流畅性", "level": "明显", "desc": f"有明显停顿(静音{silence_ratio:.0%}), 建议分段熟练后连贯演奏"})
@@ -275,7 +530,6 @@ def diagnose_issues(user_feat, ref_feat, y, sr):
         issues.append({"type": "流畅性", "level": "轻微", "desc": "偶有停顿, 整体尚可"})
     else:
         issues.append({"type": "流畅性", "level": "良好", "desc": "演奏连贯流畅"})
-    # 力度平衡
     ma = analyze_melody_accompaniment(y, sr)
     if ma["balance"] < 0.4:
         issues.append({"type": "力度平衡", "level": "明显", "desc": "左手伴奏偏重, 盖住了右手旋律, 建议右手加强、左手放松"})
@@ -283,7 +537,6 @@ def diagnose_issues(user_feat, ref_feat, y, sr):
         issues.append({"type": "力度平衡", "level": "轻微", "desc": "左右手力度基本平衡, 可更突出旋律"})
     else:
         issues.append({"type": "力度平衡", "level": "良好", "desc": "旋律突出, 伴奏适度"})
-    # 音乐表现
     if user_feat["volumeRange"] < 0.15:
         issues.append({"type": "音乐表现", "level": "需改进", "desc": "力度变化少, 缺乏强弱对比, 建议加强音乐表现力"})
     elif user_feat["volumeRange"] < 0.3:
@@ -297,9 +550,9 @@ STUCK_PATTERNS = ["请上传学生演奏", "建议时长30", "五个维度进行
 
 def analyze_rhythm(y, sr):
     try:
-        tempo, beat_frames = librosa.beat.beat_track(y=y, sr=sr)
+        tempo, beat_frames = _beat_track(y=y, sr=sr)
         if len(beat_frames) < 3: return 60, "节拍点太少"
-        beat_times = librosa.frames_to_time(beat_frames, sr=sr)
+        beat_times = _frames_to_time(beat_frames, sr=sr)
         intervals = np.diff(beat_times)
         cv = np.std(intervals) / (np.mean(intervals) + 1e-6)
         score = max(40, min(100, int(100 - cv * 133)))
@@ -313,7 +566,7 @@ def analyze_rhythm(y, sr):
 def analyze_pitch(y, sr):
     try:
         ref_chroma = get_reference_chroma()
-        perf_chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
+        perf_chroma = _chroma_cqt(y=y, sr=sr, hop_length=512)
         if ref_chroma is None: return 65, "参考数据不可用"
         ref_prof = ref_chroma.mean(axis=1); perf_prof = perf_chroma.mean(axis=1)
         ref_norm = ref_prof / (np.linalg.norm(ref_prof) + 1e-6)
@@ -338,7 +591,7 @@ def analyze_pitch(y, sr):
 
 def analyze_fluency(y, sr):
     try:
-        rms = librosa.feature.rms(y=y)[0]
+        rms = _rms(y=y)
         threshold = np.max(rms) * 0.12
         silent = rms < threshold
         silence_ratio = float(np.sum(silent) / max(len(silent), 1))
@@ -368,7 +621,7 @@ def analyze_dynamics(rms):
 
 def analyze_expression(y, sr, tempo):
     try:
-        rms = librosa.feature.rms(y=y)[0]
+        rms = _rms(y=y)
         mid = len(rms) // 2
         strong = np.mean(rms[:mid]) if mid > 0 else 0
         weak = np.mean(rms[mid:]) if mid > 0 else 0
@@ -382,19 +635,19 @@ def analyze_expression(y, sr, tempo):
     except: return 65, "表现力分析受限"
 
 def identify_song(y, sr):
-    """曲目识别 — 用 librosa.sequence.dtw + 12次转调偏移找最佳匹配
-    这是专业音频比对方法: 对色谱做DTW, 12个半音偏移各试一次, 取最低cost"""
+    """曲目识别 — 用 DTW + 12次转调偏移找最佳匹配
+    纯numpy实现的DTW对色谱做比对, 12个半音偏移各试一次, 取最低cost"""
     try:
         ref_chroma = get_reference_chroma()
         if ref_chroma is None: return True, 0.7, "参考数据不可用"
 
-        # 提取用户音频色谱 (用harmonic成分, 更干净)
-        y_h, _ = librosa.effects.hpss(y)
-        perf_chroma = librosa.feature.chroma_cqt(y=y_h, sr=sr, hop_length=512)
+        # 提取用户音频色谱 (跳过谐波分离, 直接用y)
+        y_h, _ = _hpss(y)
+        perf_chroma = _chroma_cqt(y=y_h, sr=sr, hop_length=512)
 
         # 归一化色谱列
-        ref_norm = librosa.util.normalize(ref_chroma, axis=0)
-        perf_norm = librosa.util.normalize(perf_chroma, axis=0)
+        ref_norm = _normalize(ref_chroma, axis=0)
+        perf_norm = _normalize(perf_chroma, axis=0)
 
         # 12次转调偏移DTW — 找最佳匹配
         best_cost = 999
@@ -402,7 +655,7 @@ def identify_song(y, sr):
         costs = []
         for shift in range(12):
             perf_shifted = np.roll(perf_norm, shift, axis=0)
-            D, wp = librosa.sequence.dtw(X=ref_norm, Y=perf_shifted, metric='cosine')
+            D, wp = _dtw(X=ref_norm, Y=perf_shifted, metric='cosine')
             cost = float(D[-1, -1] / len(wp))
             costs.append(cost)
             if cost < best_cost:
@@ -445,13 +698,13 @@ def get_reference_scores():
     if _ref_scores is not None: return _ref_scores
     try:
         if not os.path.exists(REFERENCE_AUDIO): return None
-        y, sr = librosa.load(REFERENCE_AUDIO, sr=22050, mono=True)
+        y, sr = _load_audio(REFERENCE_AUDIO, sr=22050)
         r_rhythm, _ = analyze_rhythm(y, sr)
         r_pitch, _ = analyze_pitch(y, sr)
         r_fluency, _ = analyze_fluency(y, sr)
-        rms = librosa.feature.rms(y=y)[0]
+        rms = _rms(y=y)
         r_dynamics, _ = analyze_dynamics(rms)
-        tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+        tempo, _ = _beat_track(y=y, sr=sr)
         r_expression, _ = analyze_expression(y, sr, float(tempo))
         _ref_scores = {"rhythm": r_rhythm, "pitch": r_pitch, "fluency": r_fluency, "dynamics": r_dynamics, "expression": r_expression}
         print(f"[ref] 基准分数: {_ref_scores}")
@@ -465,7 +718,7 @@ def get_reference_features():
     if _ref_features is not None: return _ref_features
     try:
         if os.path.exists(REFERENCE_AUDIO):
-            y, sr = librosa.load(REFERENCE_AUDIO, sr=22050, mono=True)
+            y, sr = _load_audio(REFERENCE_AUDIO, sr=22050)
             _ref_features = extract_basic_features(y, sr)
             print(f"[ref] 基准特征: {_ref_features}")
             return _ref_features
@@ -479,7 +732,7 @@ def normalize_to_ref(score, ref_score):
 
 def extract_notes_set(y, sr):
     try:
-        chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
+        chroma = _chroma_cqt(y=y, sr=sr, hop_length=512)
         profile = chroma.mean(axis=1)
         result = {}
         for midi in range(48, 75):
@@ -494,7 +747,7 @@ def get_reference_notes_set():
     if _ref_notes_set is not None: return _ref_notes_set
     try:
         if os.path.exists(REFERENCE_AUDIO):
-            y, sr = librosa.load(REFERENCE_AUDIO, sr=22050, mono=True)
+            y, sr = _load_audio(REFERENCE_AUDIO, sr=22050)
             _ref_notes_set = extract_notes_set(y, sr)
             return _ref_notes_set
     except: pass
@@ -556,7 +809,7 @@ def analyze():
             audio_file.save(tmp.name)
             tmp_path = tmp.name
         try:
-            y, sr = librosa.load(tmp_path, sr=22050, mono=True)
+            y, sr = _load_audio(tmp_path, sr=22050)
             original_duration = len(y) / sr
             print(f"[analyze] 音频: {original_duration:.1f}秒")
             MAX_DURATION = 60
@@ -565,7 +818,7 @@ def analyze():
 
             # ===== 先裁剪静音/噪音, 提取有效演奏片段 =====
             try:
-                yt_trimmed, trim_idx = librosa.effects.trim(y, top_db=30)
+                yt_trimmed, trim_idx = _trim(y, top_db=30)
                 if len(yt_trimmed) > sr * 3:  # 裁剪后至少3秒
                     trimmed_duration = len(yt_trimmed) / sr
                     lead_silence = trim_idx[0] / sr
@@ -576,14 +829,14 @@ def analyze():
                 pass
 
             # ===== 改进1: 音频质量检测 =====
-            rms_full = librosa.feature.rms(y=y)[0]
+            rms_full = _rms(y=y)
             avg_vol = float(np.mean(rms_full))
             clipping_ratio = float(np.sum(np.abs(y) > 0.95) / len(y))
             noise_floor = float(np.percentile(rms_full, 10))
             snr = avg_vol / (noise_floor + 1e-6)
 
             # 改进3: 有效演奏片段检测
-            yt, trim_idx = librosa.effects.trim(y, top_db=30)
+            yt, trim_idx = _trim(y, top_db=30)
             effective_duration = len(yt) / sr
             lead_silence = trim_idx[0] / sr
             silent_frames = rms_full < np.max(rms_full) * 0.12
@@ -615,7 +868,7 @@ def analyze():
 
             # ===== 曲目匹配闸门 =====
             user_feat = extract_basic_features(y, sr)
-            user_chroma = librosa.feature.chroma_cqt(y=y, sr=sr, hop_length=512)
+            user_chroma = _chroma_cqt(y=y, sr=sr, hop_length=512)
             ref_feat = get_reference_features()
             is_correct, similarity, sim_comment = identify_song(y, sr)
 
@@ -663,12 +916,12 @@ def analyze():
             # 闸门3
             dtw_sim_noshift = similarity
             try:
-                ref_norm_gate = librosa.util.normalize(ref_chroma_gate, axis=0) if ref_chroma_gate is not None else None
-                y_h_gate, _ = librosa.effects.hpss(y)
-                perf_chroma_gate = librosa.feature.chroma_cqt(y=y_h_gate, sr=sr, hop_length=512)
-                perf_norm_gate = librosa.util.normalize(perf_chroma_gate, axis=0)
+                ref_norm_gate = _normalize(ref_chroma_gate, axis=0) if ref_chroma_gate is not None else None
+                y_h_gate, _ = _hpss(y)
+                perf_chroma_gate = _chroma_cqt(y=y_h_gate, sr=sr, hop_length=512)
+                perf_norm_gate = _normalize(perf_chroma_gate, axis=0)
                 if ref_norm_gate is not None:
-                    D_noshift, wp_noshift = librosa.sequence.dtw(X=ref_norm_gate, Y=perf_norm_gate, metric='cosine')
+                    D_noshift, wp_noshift = _dtw(X=ref_norm_gate, Y=perf_norm_gate, metric='cosine')
                     dtw_cost_noshift = float(D_noshift[-1, -1] / len(wp_noshift))
                     dtw_sim_noshift = max(0, min(1, 1 - dtw_cost_noshift * 2))
                     if dtw_sim_noshift < 0.25:
@@ -678,14 +931,14 @@ def analyze():
 
             # 闸门4
             try:
-                onset_frames = librosa.onset.onset_detect(y=y, sr=sr, hop_length=512)
+                onset_frames = _onset_detect(y=y, sr=sr, hop_length=512)
                 if len(onset_frames) >= 10:
                     user_fp = np.argmax(user_chroma[:, onset_frames[:20]], axis=0)
                     user_int = np.where(np.diff(user_fp) % 12 > 6, np.diff(user_fp) % 12 - 12, np.diff(user_fp) % 12)
-                    ref_y_fp, _ = librosa.load(REFERENCE_AUDIO, sr=22050, mono=True)
-                    ref_of = librosa.onset.onset_detect(y=ref_y_fp, sr=22050, hop_length=512)
+                    ref_y_fp, _ = _load_audio(REFERENCE_AUDIO, sr=22050)
+                    ref_of = _onset_detect(y=ref_y_fp, sr=22050, hop_length=512)
                     if len(ref_of) >= 10:
-                        ref_fp = np.argmax(librosa.feature.chroma_cqt(y=ref_y_fp, sr=22050, hop_length=512)[:, ref_of[:20]], axis=0)
+                        ref_fp = np.argmax(_chroma_cqt(y=ref_y_fp, sr=22050, hop_length=512)[:, ref_of[:20]], axis=0)
                         ref_int = np.where(np.diff(ref_fp) % 12 > 6, np.diff(ref_fp) % 12 - 12, np.diff(ref_fp) % 12)
                         ml = min(len(user_int), len(ref_int))
                         dm = float(np.sum(np.sign(user_int[:ml]) == np.sign(ref_int[:ml])) / ml)
@@ -731,9 +984,9 @@ def analyze():
             rhythm_raw, rhythm_comment = analyze_rhythm(y, sr)
             pitch_raw, pitch_comment = analyze_pitch(y, sr)
             fluency_raw, fluency_comment = analyze_fluency(y, sr)
-            rms = librosa.feature.rms(y=y)[0]
+            rms = _rms(y=y)
             dynamics_raw, dynamics_comment = analyze_dynamics(rms)
-            tempo, _ = librosa.beat.beat_track(y=y, sr=sr)
+            tempo, _ = _beat_track(y=y, sr=sr)
             expression_raw, expression_comment = analyze_expression(y, sr, float(tempo))
 
             ref_scores = get_reference_scores()
@@ -840,7 +1093,6 @@ def speech_to_text():
             audio_file.save(tmp.name); tmp_path = tmp.name
         try:
             wav_path = tmp_path.replace(".webm", ".wav")
-            import subprocess
             result = subprocess.run(["ffmpeg", "-y", "-i", tmp_path, "-ar", "16000", "-ac", "1", wav_path], capture_output=True, timeout=30)
             if result.returncode != 0: return jsonify({"error": "音频转换失败"}), 500
             import speech_recognition as sr
@@ -863,5 +1115,5 @@ if __name__ == "__main__":
     get_reference_scores()
     get_reference_features()
     get_reference_notes_set()
-    print("[启动] 音频分析微服务启动: http://localhost:5001")
+    print("[启动] 音频分析微服务(轻量版)启动: http://localhost:5001")
     app.run(host="0.0.0.0", port=5001, debug=False)
