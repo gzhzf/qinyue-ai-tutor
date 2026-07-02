@@ -11,4 +11,4 @@ RUN pip3 install numpy flask SpeechRecognition pydub --break-system-packages --n
 COPY . .
 EXPOSE $PORT
 
-CMD ["sh", "-c", "cd /app && python3 analyze.py > /tmp/py.log 2>&1 & sleep 10 && node server.js"]
+CMD ["sh", "-c", "cd /app && python3 analyze.py > /tmp/py.log 2>&1 & sleep 20 && node server.js"]
