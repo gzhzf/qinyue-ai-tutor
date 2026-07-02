@@ -1,9 +1,10 @@
 FROM node:18-slim
 
-# 安装 Python3 + ffmpeg + 系统依赖
+# 安装系统依赖
 RUN apt-get update && apt-get install -y \
     python3 python3-pip python3-dev \
     ffmpeg \
+    bash \
     && rm -rf /var/lib/apt/lists/*
 
 # 设置工作目录
@@ -22,5 +23,5 @@ COPY . .
 # 暴露端口
 EXPOSE $PORT
 
-# 启动
-CMD ["bash", "start.sh"]
+# 直接用 sh 启动 (不依赖 bash)
+CMD ["sh", "-c", "cd /app && python3 analyze.py & sleep 8 && node server.js"]
