@@ -26,6 +26,7 @@ REFERENCE_AUDIO = os.path.join(os.path.dirname(os.path.abspath(__file__)), "refe
 _ref_chroma = None
 _ref_scores = None
 _ref_features = None
+_last_best_shift = 0
 _ref_notes_set = None
 
 def synth_midi_simple(pm, fs=22050):
@@ -425,8 +426,12 @@ def identify_song(y, sr):
         print(f"[identify] DTW best_cost={best_cost:.4f} (shift={best_shift}), similarity={similarity:.3f}, cos_sim={cos_sim:.3f}")
         print(f"[identify] 用户top3: {user_top3}, 参考 top3: {ref_top3}")
 
+        # 把best_shift存到全局变量供闸门使用
+        global _last_best_shift
+        _last_best_shift = best_shift
+
         if similarity > 0.60:
-            return True, round(similarity, 2), f"曲目匹配度{similarity:.0%} (DTW cost={best_cost:.3f})"
+            return True, round(similarity, 2), f"曲目匹配度{similarity:.0%} (DTW cost={best_cost:.3f}, shift={best_shift})"
         elif similarity > 0.40:
             return True, round(similarity, 2), f"曲目匹配度偏低({similarity:.0%}), 可能不是Anh.114"
         else:
@@ -558,6 +563,18 @@ def analyze():
             if original_duration > MAX_DURATION:
                 y = y[:int(MAX_DURATION * sr)]
 
+            # ===== 先裁剪静音/噪音, 提取有效演奏片段 =====
+            try:
+                yt_trimmed, trim_idx = librosa.effects.trim(y, top_db=30)
+                if len(yt_trimmed) > sr * 3:  # 裁剪后至少3秒
+                    trimmed_duration = len(yt_trimmed) / sr
+                    lead_silence = trim_idx[0] / sr
+                    if lead_silence > 0.5:
+                        print(f"[trim] 裁掉前{lead_silence:.1f}秒静音/噪音, 有效{trimmed_duration:.1f}秒")
+                    y = yt_trimmed
+            except:
+                pass
+
             # ===== 改进1: 音频质量检测 =====
             rms_full = librosa.feature.rms(y=y)[0]
             avg_vol = float(np.mean(rms_full))
@@ -623,6 +640,26 @@ def analyze():
                 veto_triggered = True
                 veto_reasons.append(f"核心音组不匹配: G/A/B/D中仅{core_present}个明显出现")
 
+            # 闸门2.5: B音能量+G大调覆盖率组合判断
+            # B音偏低+G大调覆盖率也低 → 才拦截; B音偏低但G大调覆盖率高 → 可能是学生演奏问题, 放过
+            ref_b_energy = ref_prof[11]
+            user_b_energy = perf_prof[11]
+            if user_b_energy < ref_b_energy * 0.50 and g_coverage < 0.65:
+                veto_triggered = True
+                veto_reasons.append(f"B音偏低且G大调覆盖率不足({g_coverage:.0%}), 不符合Anh.114特征")
+
+            # 闸门2.6: D大调倾向检测 (C#偏高+D偏高+G大调覆盖率低)
+            if perf_prof[1] > 0.15 and perf_prof[2] > 0.35 and g_coverage < 0.65:
+                veto_triggered = True
+                veto_reasons.append(f"疑似D大调(C#={perf_prof[1]:.2f}, D={perf_prof[2]:.2f}), 非G大调Anh.114")
+
+            # 闸门2.7: 转调检测 — DTW需要转调才匹配说明可能不是G大调原调
+            # 但如果cos_sim很高(>0.90), 音高分布已经证明是G大调, 不拦截
+            cos_sim_val = float(np.dot(ref_prof/(np.linalg.norm(ref_prof)+1e-6), perf_prof/(np.linalg.norm(perf_prof)+1e-6)))
+            if _last_best_shift != 0 and similarity < 0.60 and cos_sim_val < 0.92:
+                veto_triggered = True
+                veto_reasons.append(f"DTW需转调{_last_best_shift}个半音才匹配且音高相似度{cos_sim_val:.0%}, 非G大调原调Anh.114")
+
             # 闸门3
             dtw_sim_noshift = similarity
             try:
@@ -652,9 +689,9 @@ def analyze():
                         ref_int = np.where(np.diff(ref_fp) % 12 > 6, np.diff(ref_fp) % 12 - 12, np.diff(ref_fp) % 12)
                         ml = min(len(user_int), len(ref_int))
                         dm = float(np.sum(np.sign(user_int[:ml]) == np.sign(ref_int[:ml])) / ml)
-                        if dm < 0.35:
+                        if dm < 0.25 and similarity < 0.60:
                             veto_triggered = True
-                            veto_reasons.append(f"开头旋律轮廓匹配率仅{dm:.0%}, 旋律走向与Anh.114不一致")
+                            veto_reasons.append(f"开头旋律轮廓匹配率仅{dm:.0%}且旋律相似度{similarity:.0%}, 旋律走向与Anh.114不一致")
             except: pass
 
             user_meter = user_feat.get("meter", "未知")
