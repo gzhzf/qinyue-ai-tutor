@@ -909,7 +909,7 @@ def analyze():
             # 闸门2.7: 转调检测 — DTW需要转调才匹配说明可能不是G大调原调
             # 但如果cos_sim很高(>0.90), 音高分布已经证明是G大调, 不拦截
             cos_sim_val = float(np.dot(ref_prof/(np.linalg.norm(ref_prof)+1e-6), perf_prof/(np.linalg.norm(perf_prof)+1e-6)))
-            if _last_best_shift != 0 and similarity < 0.60 and cos_sim_val < 0.92:
+            if _last_best_shift != 0 and similarity < 0.60 and cos_sim_val < 0.85:
                 veto_triggered = True
                 veto_reasons.append(f"DTW需转调{_last_best_shift}个半音才匹配且音高相似度{cos_sim_val:.0%}, 非G大调原调Anh.114")
 
