@@ -551,7 +551,7 @@
           const formData = new FormData();
           formData.append("audio", audioBlob, "piano_recording.webm");
           try {
-            var res = await fetch("/api/assess", { method: "POST", body: formData });
+            var res = await fetch("/api/assess", { method: "POST", body: formData, signal: AbortSignal.timeout(120000) });
             var data = await res.json();
             assessBtn.disabled = false;
             if (!res.ok) { stopProgress("error"); alert("测评失败: " + (data.error || "未知错误")); return; }
@@ -1105,6 +1105,6 @@
     });
     if (window.speechSynthesis) { window.speechSynthesis.getVoices(); window.speechSynthesis.onvoiceschanged = function() { window.speechSynthesis.getVoices(); }; }
   </script>
-  <div style="text-align:center;padding:12px;font-size:11px;color:#ccc;">版本：v0.5.0-state-fix</div>
+  <div style="text-align:center;padding:12px;font-size:11px;color:#ccc;">版本：v0.6.0-timeout-fix</div>
 </body>
 </html>
